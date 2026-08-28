@@ -68,6 +68,22 @@ def spots_endpoint(request):
     serializer.is_valid(raise_exception=True)
     spot = serializer.save()
 
+    if settings.FAKE_PAYMENTS:
+        # Mismo recorrido que un pago real: el frontend redirige a
+        # return_url?paid=<id>, ve el spot confirmado y abre el diálogo de X.
+        spot.status = 'confirmed'
+        spot.save(update_fields=['status'])
+        logger.warning('FAKE_PAYMENTS: spot %s confirmado sin cobrar.', spot.id)
+        return Response(
+            {
+                'id': spot.id,
+                'payment_url': f'{settings.DODO_RETURN_URL}?paid={spot.id}',
+                'session_id': 'fake',
+                'status': spot.status,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
     try:
         checkout = services.create_checkout(
             amount_cents=spot.price_paid,

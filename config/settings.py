@@ -168,6 +168,17 @@ DODO_SERVER = config('DODO_SERVER', default='test')
 # URL a la que Dodo redirige a quien paga (poseída por el frontend)
 DODO_RETURN_URL = config('DODO_RETURN_URL', default='http://localhost:5173')
 
+# ── Modo demo (grabar video, probar el flujo sin cobrar) ────────────────────
+# Salta DodoPayments y da el spot por pagado. Confirma spots sin plata de por
+# medio, así que queda encerrado detrás de DEBUG: en un server real esto sería
+# regalar lugares en el vidrio.
+FAKE_PAYMENTS = config('FAKE_PAYMENTS', default=False, cast=bool)
+if FAKE_PAYMENTS and not DEBUG:
+    raise ImproperlyConfigured(
+        'FAKE_PAYMENTS confirma spots sin cobrar. Sólo se permite con '
+        'DEBUG=True, nunca en un entorno desplegado.'
+    )
+
 # ── DataFast ────────────────────────────────────────────────────────────────
 # Clave de la Payments API (df_...). Vacía = no se reporta nada.
 DATAFAST_API_KEY = config('DATAFAST_API_KEY', default='')

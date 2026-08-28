@@ -118,6 +118,25 @@ class SpotEndpointTests(TestCase):
         spot = Spot.objects.get()
         self.assertEqual(kwargs['reference'], str(spot.id))
 
+    @override_settings(FAKE_PAYMENTS=True)
+    def test_fake_payments_confirms_without_calling_dodo(self):
+        """Modo demo: mismo recorrido, sin proveedor de pago."""
+        with mock.patch.object(services, 'create_checkout') as mocked:
+            resp = self.client.post(
+                reverse('spots-list'),
+                data=json.dumps({
+                    'brand_name': 'Demo', 'size': 'small', 'offered_price': 5.0,
+                    'website': 'https://demo.dev',
+                    'position_x': 0.2, 'position_y': 0.2,
+                }),
+                content_type='application/json',
+            )
+        self.assertEqual(resp.status_code, 201)
+        mocked.assert_not_called()
+        spot = Spot.objects.get(pk=resp.json()['id'])
+        self.assertEqual(spot.status, 'confirmed')
+        self.assertIn(f'?paid={spot.id}', resp.json()['payment_url'])
+
     def test_website_is_required(self):
         """Sin sitio no hay tarjeta de sponsor, así que el spot no se crea."""
         resp = self.client.post(
