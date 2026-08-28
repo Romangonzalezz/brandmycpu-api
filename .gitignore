@@ -1,0 +1,23 @@
+# Python / Django
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+db.sqlite3
+dev_local_check.sqlite3
+*.sqlite3
+
+# Producción
+staticfiles/
+media/
+logs/
+*.log
+
+# Entorno
+.env
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

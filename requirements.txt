@@ -1,0 +1,26 @@
+# Web framework
+Django>=5.0,<5.3
+djangorestframework>=3.15,<3.16
+
+# CORS para el frontend (Vite / dominio de producción)
+django-cors-headers>=4.4,<4.7
+
+# Configuración por variables de entorno
+python-decouple>=3.8,<3.9
+dj-database-url>=2.2,<2.3
+
+# PostgreSQL driver (psycopg 3)
+psycopg[binary]>=3.2,<3.3
+
+# Imágenes (ImageField de Spot)
+Pillow>=10.4,<11
+
+# Cliente HTTP para la integración con DodoPayments
+requests>=2.32,<3
+
+# Producción en Railway (Linux)
+gunicorn>=22.0,<23
+whitenoise>=6.7,<7
+
+# Registro de errores en producción
+python-json-logger>=2.0,<3
