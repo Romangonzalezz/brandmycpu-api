@@ -67,7 +67,9 @@ def spots_endpoint(request):
     try:
         checkout = services.create_checkout(
             amount_cents=spot.price_paid,
-            return_url=settings.DODO_RETURN_URL,
+            # El marcador es nuestro, no de Dodo: al volver, el frontend
+            # sabe qué spot se pagó y ofrece postearlo en X.
+            return_url=f'{settings.DODO_RETURN_URL}?paid={spot.id}',
             reference=str(spot.id),
             email=(request.data.get('email') or '').strip(),
         )
@@ -156,6 +158,15 @@ def spot_webhook(request):
             spot.status = 'confirmed'
             updated = True
         spot.save(update_fields=['status', 'payment_id'])
+
+        # Analítica, no parte del settle: si DataFast falla el spot ya quedó
+        # confirmado igual.
+        services.report_payment_to_datafast(
+            amount_cents=event['amount_cents'] or spot.price_paid,
+            transaction_id=event['payment_id'] or f'spot-{spot.id}',
+            visitor_id=spot.datafast_visitor_id,
+            name=spot.brand_name,
+        )
 
     elif spot and event['is_failed']:
         if spot.status != 'confirmed':

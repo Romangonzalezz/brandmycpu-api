@@ -136,13 +136,19 @@ LOGGING = {
 # ── DodoPayments ────────────────────────────────────────────────────────────
 DODO_API_KEY = config('DODO_API_KEY', default='')
 # Id del producto pay-what-you-want en el dashboard de Dodo
-DODO_PRODUCT_ID = config('DODO_PRODUCT_ID', default='')
+DODO_PRODUCT_ID = config(
+    'DODO_PRODUCT_ID', default='pdt_0NmNXr1VG164viZhNZCXL'
+)
 # Secreto del webhook (formato whsec_<base64>)
 DODO_WEBHOOK_SECRET = config('DODO_WEBHOOK_SECRET', default='')
 # 'test' | 'live'
 DODO_SERVER = config('DODO_SERVER', default='test')
 # URL a la que Dodo redirige a quien paga (poseída por el frontend)
 DODO_RETURN_URL = config('DODO_RETURN_URL', default='http://localhost:5173')
+
+# ── DataFast ────────────────────────────────────────────────────────────────
+# Clave de la Payments API (df_...). Vacía = no se reporta nada.
+DATAFAST_API_KEY = config('DATAFAST_API_KEY', default='')
 
 # Objetivo de recaudación en centavos de dólar ($800 = salir de iGPU)
 SPOT_GOAL = config('SPOT_GOAL', default=80000, cast=int)

@@ -32,14 +32,24 @@ class SpotSerializer(serializers.ModelSerializer):
     class Meta:
         model = Spot
         fields = [
-            'id', 'brand_name', 'logo_url', 'size', 'width_cm', 'height_cm',
-            'position_x', 'position_y', 'price_paid', 'status', 'created_at',
-            'offered_price',
+            'id', 'brand_name', 'website', 'x_handle', 'logo', 'logo_url',
+            'size', 'width_cm',
+            'height_cm', 'position_x', 'position_y', 'price_paid', 'status',
+            'created_at', 'offered_price', 'datafast_visitor_id',
         ]
         read_only_fields = [
             'id', 'logo_url', 'price_paid', 'status', 'created_at',
         ]
         extra_kwargs = {
+            # El comprador adjunta el logo tal cual: se guarda sin reprocesar.
+            'logo': {'required': False, 'write_only': True},
+            # El sitio se pide siempre: es lo que muestra la tarjeta del
+            # sponsor cuando alguien apunta su sticker. El de X es opcional.
+            'website': {'required': True, 'allow_blank': False},
+            'x_handle': {'required': False, 'allow_blank': True},
+            'datafast_visitor_id': {
+                'required': False, 'allow_blank': True, 'write_only': True,
+            },
             'width_cm': {'required': False},
             'height_cm': {'required': False},
             'position_x': {'required': False},
@@ -91,7 +101,10 @@ class ActivitySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Spot
-        fields = ['id', 'brand_name', 'size', 'price_paid', 'created_at']
+        fields = [
+            'id', 'brand_name', 'website', 'x_handle', 'size', 'price_paid',
+            'created_at',
+        ]
 
 
 class GoalSerializer(serializers.Serializer):

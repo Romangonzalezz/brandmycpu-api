@@ -28,6 +28,8 @@ logger = logging.getLogger('brandmycpu.dodo')
 MAX_SIGNATURE_AGE_SECONDS = 300
 REQUEST_TIMEOUT_SECONDS = 15
 
+DATAFAST_PAYMENTS_URL = 'https://datafa.st/api/v1/payments'
+
 SUCCESS_EVENTS = {'payment.succeeded'}
 FAILURE_EVENTS = {'payment.failed', 'payment.cancelled'}
 
@@ -167,3 +169,53 @@ def parse_webhook(body: bytes, headers: Mapping[str, str]) -> dict[str, Any]:
         'payment_id': str(data.get('payment_id') or ''),
         'amount_cents': int(data.get('settlement_amount') or data.get('total_amount') or 0),
     }
+
+# ── DataFast (Payments API) ─────────────────────────────────────────────────
+def report_payment_to_datafast(
+    *,
+    amount_cents: int,
+    transaction_id: str,
+    visitor_id: str = '',
+    email: str = '',
+    name: str = '',
+) -> bool:
+    """Reporta un pago confirmado a DataFast para su globo de ingresos.
+
+    Best-effort: DataFast es analítica, no puede tumbar la confirmación de un
+    spot ya pagado. Devuelve True sólo si el POST salió bien.
+    """
+    api_key = settings.DATAFAST_API_KEY
+    if not api_key:
+        return False
+
+    payload: dict[str, Any] = {
+        'amount': round(amount_cents / 100, 2),
+        'currency': 'USD',
+        # Mismo id de pago en cada reintento: DataFast deduplica por acá.
+        'transaction_id': transaction_id,
+    }
+    if visitor_id:
+        payload['datafast_visitor_id'] = visitor_id
+    if email:
+        payload['email'] = email
+    if name:
+        payload['customer_name'] = name
+
+    try:
+        response = requests.post(
+            DATAFAST_PAYMENTS_URL,
+            json=payload,
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        logger.warning('DataFast no recibió el pago %s: %s', transaction_id, exc)
+        return False
+
+    if response.status_code >= 400:
+        logger.warning(
+            'DataFast rechazó el pago %s (%s): %s',
+            transaction_id, response.status_code, response.text[:200],
+        )
+        return False
+    return True
