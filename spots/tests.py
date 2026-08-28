@@ -184,29 +184,120 @@ class SpotEndpointTests(TestCase):
         self.assertIn('website', resp.json())
         self.assertFalse(Spot.objects.exists())
 
-    def test_cannot_buy_a_spot_that_overlaps_a_sold_one(self):
-        """Un small encima de un large ya vendido se rechaza en el backend.
+    def test_cannot_take_a_sold_spot_without_beating_its_price(self):
+        """Un small encima de un large vendido a $20 no entra por $5.
 
         El frontend esconde el hueco, pero eso corre en el navegador del
-        comprador: dos sponsors pagando el mismo centímetro de vidrio no se
-        puede cumplir.
+        comprador: acá se decide. Empatar tampoco alcanza, hay que superar.
         """
         Spot.objects.create(
             brand_name='Grande', size='large', width_cm=9.5, height_cm=4.0,
             position_x=0.5, position_y=0.5, price_paid=2000, status='confirmed',
         )
+        for offer in (5.0, 20.0):  # por debajo, y exactamente igual
+            resp = self.client.post(
+                reverse('spots-list'),
+                data=json.dumps({
+                    'brand_name': 'Chico', 'size': 'small', 'offered_price': offer,
+                    'website': 'https://chico.dev',
+                    'position_x': 0.5, 'position_y': 0.5,
+                }),
+                content_type='application/json',
+            )
+            self.assertEqual(resp.status_code, 400, offer)
+            self.assertIn('offered_price', resp.json())
+        self.assertEqual(Spot.objects.count(), 1)
+
+    def test_outbid_has_to_beat_the_sum_of_everything_it_covers(self):
+        """Un large tapa tres smalls: hay que superar el total, no cada uno.
+
+        Superando de a uno, $21 se llevaría $60 de vidrio.
+        """
+        for x in (0.30, 0.4326, 0.5651):
+            Spot.objects.create(
+                brand_name=f'S{x}', size='small', width_cm=4.5, height_cm=4.5,
+                position_x=x, position_y=0.5, price_paid=2000, status='confirmed',
+            )
         resp = self.client.post(
             reverse('spots-list'),
             data=json.dumps({
-                'brand_name': 'Chico', 'size': 'small', 'offered_price': 5.0,
-                'website': 'https://chico.dev',
+                'brand_name': 'Grande', 'size': 'large', 'offered_price': 21.0,
+                'website': 'https://grande.dev',
+                'position_x': 0.4326, 'position_y': 0.5,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('offered_price', resp.json())
+
+    def test_a_live_checkout_cannot_be_outbid_at_any_price(self):
+        """Un pending no es una oferta: la plata no entró y el lugar está
+        reservado. Sin esto, el segundo comprador desplaza a alguien que ni
+        llegó a estar en el vidrio."""
+        Spot.objects.create(
+            brand_name='Comprando', size='small', width_cm=4.5, height_cm=4.5,
+            position_x=0.5, position_y=0.5, price_paid=500, status='pending',
+        )
+        resp = self.client.post(
+            reverse('spots-list'),
+            data=json.dumps({
+                'brand_name': 'Rico', 'size': 'small', 'offered_price': 500.0,
+                'website': 'https://rico.dev',
                 'position_x': 0.5, 'position_y': 0.5,
             }),
             content_type='application/json',
         )
         self.assertEqual(resp.status_code, 400)
         self.assertIn('position_x', resp.json())
-        self.assertEqual(Spot.objects.count(), 1)
+
+    @override_settings(FAKE_PAYMENTS=True)
+    def test_settling_an_outbid_displaces_the_previous_sponsor(self):
+        """El desplazado sale del vidrio, no se borra, y no se le devuelve."""
+        loser = Spot.objects.create(
+            brand_name='Antes', size='small', width_cm=4.5, height_cm=4.5,
+            position_x=0.5, position_y=0.5, price_paid=500, status='confirmed',
+        )
+        resp = self.client.post(
+            reverse('spots-list'),
+            data=json.dumps({
+                'brand_name': 'Despues', 'size': 'small', 'offered_price': 6.0,
+                'website': 'https://despues.dev',
+                'position_x': 0.5, 'position_y': 0.5,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        loser.refresh_from_db()
+        winner = Spot.objects.get(pk=resp.json()['id'])
+        self.assertEqual(winner.status, 'confirmed')
+        self.assertEqual(loser.status, 'outbid')
+        # La fila sigue ahí y con su monto: no hubo reembolso.
+        self.assertEqual(loser.price_paid, 500)
+
+        # Y su plata sigue contando: la barra no puede bajar por dinero que
+        # entró y nunca se devolvió.
+        with override_settings(SPOT_GOAL=10000):
+            self.assertEqual(self.client.get(reverse('goal')).json()['raised'], 1100)
+
+    @override_settings(FAKE_PAYMENTS=True)
+    def test_a_displaced_spot_frees_its_place_for_the_next_buyer(self):
+        """Una vez desplazado deja de ocupar: si no, el hueco queda trabado por
+        alguien que ya no está en el vidrio."""
+        Spot.objects.create(
+            brand_name='Antes', size='small', width_cm=4.5, height_cm=4.5,
+            position_x=0.5, position_y=0.5, price_paid=500, status='outbid',
+        )
+        resp = self.client.post(
+            reverse('spots-list'),
+            data=json.dumps({
+                'brand_name': 'Nuevo', 'size': 'small', 'offered_price': 5.0,
+                'website': 'https://nuevo.dev',
+                'position_x': 0.5, 'position_y': 0.5,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 201)
 
     def test_a_free_corner_next_to_it_still_works(self):
         Spot.objects.create(

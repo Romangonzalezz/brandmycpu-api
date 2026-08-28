@@ -9,7 +9,16 @@ dev_local_check.sqlite3
 
 # Producción
 staticfiles/
-media/
+# `media/*` y no `media/`: con el directorio entero excluido, git no puede
+# volver a incluir nada de adentro y la excepcion de abajo no aplicaria.
+media/*
+# Excepcion: el logo del canje de brandthis.site. Los logos de los sponsors
+# los sube el comprador y viven en el disco del contenedor, pero ese disco es
+# efimero y no hay volumen montado, asi que un canje se perderia en cada
+# deploy. Versionarlo es lo que lo hace volver solo.
+!media/logos/
+media/logos/*
+!media/logos/brandthis.svg
 logs/
 *.log
 

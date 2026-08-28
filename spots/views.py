@@ -6,14 +6,19 @@ from django.db import connection, transaction
 from django.db.models import Sum
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from . import services
 from .models import Spot, Visitor
-from .serializers import ActivitySerializer, GoalSerializer, SpotSerializer
+from .serializers import (
+    ActivitySerializer,
+    GoalSerializer,
+    SpotSerializer,
+    _overlaps,
+)
 
 logger = logging.getLogger('brandmycpu.api')
 
@@ -31,6 +36,41 @@ LIVE_WINDOW_MINUTES = 30
 #: recurso es uno solo, así que no hace falta granularidad; si algún día hay
 #: cola, la clave puede pasar a ser el hueco.
 GLASS_LOCK_KEY = 815234
+
+
+def _confirm_and_displace(spot: Spot) -> list[int]:
+    """Confirma un spot pagado y saca del vidrio a los stickers que tapa.
+
+    El outbid desplaza y NO reembolsa: el que pierde el lugar se queda con el
+    cobro hecho. Por eso su fila pasa a `outbid` en vez de borrarse, y por eso
+    `goal()` la sigue sumando: esa plata entró y nunca se devolvió, así que la
+    barra no puede bajar sola cuando alguien es superado.
+
+    Se recalcula el solapamiento acá y no en el checkout porque el estado del
+    vidrio pudo cambiar entre el pago y el webhook. No puede haber aparecido un
+    competidor por el mismo hueco: el serializer rechaza superar un `pending`
+    vivo, así que mientras este checkout estuvo abierto el lugar era suyo.
+
+    Devuelve los ids desplazados. Llamar dentro de una transacción.
+    """
+    spot.status = 'confirmed'
+    spot.save(update_fields=['status', 'payment_id'])
+
+    losers = [
+        o.pk
+        for o in Spot.objects.filter(status__in=['confirmed', 'placed']).exclude(pk=spot.pk)
+        if _overlaps(
+            spot.position_x, spot.position_y, spot.width_cm, spot.height_cm,
+            o.position_x, o.position_y, o.width_cm, o.height_cm,
+        )
+    ]
+    if losers:
+        Spot.objects.filter(pk__in=losers).update(status='outbid')
+        logger.warning(
+            'Spot %s (%s centavos) desplazó por outbid a %s. Sin reembolso.',
+            spot.id, spot.price_paid, losers,
+        )
+    return losers
 
 
 # ── Visitors ────────────────────────────────────────────────────────────────
@@ -84,7 +124,11 @@ def spots_endpoint(request):
                 cursor.execute('SELECT pg_advisory_xact_lock(%s)', [GLASS_LOCK_KEY])
         # Validar y guardar bajo el mismo lock: entre el chequeo de solapamiento
         # y el insert no puede colarse otra compra.
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            # Sin esto el log sólo dice "Bad Request: /api/spots/": un intento
+            # de compra que falla y no deja rastro de por qué.
+            logger.warning('POST /api/spots/ rechazado: %s', serializer.errors)
+            raise serializers.ValidationError(serializer.errors)
         spot = serializer.save()
 
     # El checkout queda FUERA de la transacción: es una llamada de red y no se
@@ -93,8 +137,8 @@ def spots_endpoint(request):
     if settings.FAKE_PAYMENTS:
         # Mismo recorrido que un pago real: el frontend redirige a
         # return_url?paid=<id>, ve el spot confirmado y abre el diálogo de X.
-        spot.status = 'confirmed'
-        spot.save(update_fields=['status'])
+        with transaction.atomic():
+            _confirm_and_displace(spot)
         logger.warning('FAKE_PAYMENTS: spot %s confirmado sin cobrar.', spot.id)
         return Response(
             {
@@ -197,9 +241,14 @@ def spot_webhook(request):
         if event['payment_id']:
             spot.payment_id = event['payment_id']
         if spot.status != 'confirmed':
-            spot.status = 'confirmed'
             updated = True
-        spot.save(update_fields=['status', 'payment_id'])
+            # El desplazamiento va en la misma transacción que la confirmación:
+            # nunca puede quedar el que perdió fuera del vidrio sin que el que
+            # pagó haya entrado, ni al revés.
+            with transaction.atomic():
+                _confirm_and_displace(spot)
+        else:
+            spot.save(update_fields=['status', 'payment_id'])
 
         # Sólo en la transición. Dodo reintenta la entrega, y aunque DataFast
         # deduplica por transaction_id, cada reintento nos costaba un POST de
@@ -237,8 +286,10 @@ def spot_webhook(request):
 @permission_classes([AllowAny])
 def goal(request):
     """Objetivo de recaudación y progreso (price_paid en centavos)."""
+    # `outbid` incluido a propósito: al desplazado no se le devuelve la plata,
+    # así que sacarlo haría bajar la barra por dinero que sí entró y se quedó.
     raised = (
-        Spot.objects.filter(status__in=['confirmed', 'placed']).aggregate(
+        Spot.objects.filter(status__in=['confirmed', 'placed', 'outbid']).aggregate(
             total=Sum('price_paid')
         )['total']
         or 0

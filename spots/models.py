@@ -17,6 +17,9 @@ class Spot(models.Model):
         ('pending', 'Pending'),
         ('confirmed', 'Confirmed'),
         ('placed', 'Placed'),
+        # Le ganaron el lugar pagando más. No se borra ni se reembolsa: la
+        # fila queda para el historial y su plata sigue contando en el goal.
+        ('outbid', 'Outbid'),
     ]
 
     brand_name = models.CharField(max_length=100)

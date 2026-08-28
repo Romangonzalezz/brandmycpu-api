@@ -91,7 +91,7 @@ class SpotSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         size = attrs.get('size')
         if size and size not in SIZE_DIMENSIONS:
-            raise serializers.ValidationError({'size': 'Tamaño no válido.'})
+            raise serializers.ValidationError({'size': 'That size is not valid.'})
 
         if size:
             # Asignadas, no `setdefault`: el precio sale del tamaño, así que si
@@ -105,7 +105,7 @@ class SpotSerializer(serializers.ModelSerializer):
         for axis in ('position_x', 'position_y'):
             if not 0 <= attrs[axis] <= 1:
                 raise serializers.ValidationError({
-                    axis: 'La posición va de 0 a 1 sobre el vidrio.'
+                    axis: 'Position must be between 0 and 1 on the glass.'
                 })
 
         offered = attrs.pop('offered_price', None)
@@ -118,7 +118,7 @@ class SpotSerializer(serializers.ModelSerializer):
                 if cents < min_cents:
                     raise serializers.ValidationError({
                         'offered_price': (
-                            f"El mínimo para un spot '{size}' es "
+                            f"The minimum for a '{size}' spot is "
                             f"${min_cents / 100:.0f}."
                         )
                     })
@@ -127,25 +127,48 @@ class SpotSerializer(serializers.ModelSerializer):
             attrs['price_paid'] = int(round((offered or 5) * 100))
 
         if attrs['price_paid'] <= 0:
-            raise serializers.ValidationError({'price_paid': 'Precio inválido.'})
+            raise serializers.ValidationError({'price_paid': 'Invalid price.'})
 
         # El frontend ya esconde los huecos ocupados, pero es el navegador del
         # comprador: acá se decide. Sin esto dos sponsors pueden pagar por el
         # mismo centímetro de vidrio y no hay forma de cumplirle a los dos.
-        cutoff = timezone.now() - timedelta(minutes=RESERVATION_MINUTES)
-        taken = Spot.objects.filter(status__in=['confirmed', 'placed']) | (
-            Spot.objects.filter(status='pending', created_at__gte=cutoff)
-        )
-        for other in taken.distinct():
-            if _overlaps(
+        def hits(other):
+            return _overlaps(
                 attrs['position_x'], attrs['position_y'],
                 attrs['width_cm'], attrs['height_cm'],
                 other.position_x, other.position_y,
                 other.width_cm, other.height_cm,
-            ):
+            )
+
+        # Un checkout abierto NO se puede superar. La plata todavía no entró,
+        # así que no hay oferta que ganarle: el lugar está reservado hasta que
+        # expire la ventana. Sin esto, dos personas pagan por el mismo hueco y
+        # la segunda desplaza a alguien que ni llegó a estar en el vidrio.
+        cutoff = timezone.now() - timedelta(minutes=RESERVATION_MINUTES)
+        for other in Spot.objects.filter(status='pending', created_at__gte=cutoff):
+            if hits(other):
                 raise serializers.ValidationError({
-                    'position_x': 'Ese lugar del vidrio ya está tomado. '
-                                  'Elegí otro hueco.'
+                    'position_x': 'Someone is checking out that spot right now. '
+                                  'Try again in a few minutes.'
+                })
+
+        # Un sticker ya pagado sí se puede superar: se lo lleva quien ponga más
+        # que TODO lo que tapa.
+        #
+        # La suma y no "más que cada uno": un large de $21 tapa hasta tres
+        # smalls, y superándolos de a uno se llevaría $60 de vidrio por $21.
+        standing = [
+            o for o in Spot.objects.filter(status__in=['confirmed', 'placed'])
+            if hits(o)
+        ]
+        if standing:
+            floor = sum(o.price_paid for o in standing)
+            if attrs['price_paid'] <= floor:
+                raise serializers.ValidationError({
+                    'offered_price': (
+                        f'That spot is taken. Bid more than '
+                        f'${floor / 100:.0f} to take it.'
+                    )
                 })
 
         return attrs
