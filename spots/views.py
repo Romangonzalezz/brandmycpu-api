@@ -159,14 +159,26 @@ def spot_webhook(request):
             updated = True
         spot.save(update_fields=['status', 'payment_id'])
 
-        # Analítica, no parte del settle: si DataFast falla el spot ya quedó
+        # Sólo en la transición. Dodo reintenta la entrega, y aunque DataFast
+        # deduplica por transaction_id, cada reintento nos costaba un POST de
+        # ida y vuelta antes de poder responderle.
+        # Analítica, no parte del settle: si DataFast falla, el spot ya quedó
         # confirmado igual.
-        services.report_payment_to_datafast(
-            amount_cents=event['amount_cents'] or spot.price_paid,
-            transaction_id=event['payment_id'] or f'spot-{spot.id}',
-            visitor_id=spot.datafast_visitor_id,
-            name=spot.brand_name,
-        )
+        if updated:
+            services.report_payment_to_datafast(
+                amount_cents=event['amount_cents'] or spot.price_paid,
+                transaction_id=event['payment_id'] or f'spot-{spot.id}',
+                visitor_id=spot.datafast_visitor_id,
+                name=spot.brand_name,
+            )
+
+    elif spot and event['is_reversed']:
+        # Un reembolso o una disputa sí bajan un spot confirmado: la plata se
+        # fue, no puede seguir sumando al goal.
+        if spot.status != 'pending':
+            spot.status = 'pending'
+            spot.save(update_fields=['status'])
+            updated = True
 
     elif spot and event['is_failed']:
         if spot.status != 'confirmed':
