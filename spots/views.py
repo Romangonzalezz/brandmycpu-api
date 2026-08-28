@@ -2,6 +2,7 @@ import logging
 from datetime import timedelta
 
 from django.conf import settings
+from django.db import connection, transaction
 from django.db.models import Sum
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -18,6 +19,18 @@ logger = logging.getLogger('brandmycpu.api')
 
 # Ventana de "visitante live": últimos 30 minutos
 LIVE_WINDOW_MINUTES = 30
+
+#: Clave del advisory lock que serializa las compras.
+#:
+#: La validación de solapamiento lee los spots y después inserta. Dos personas
+#: eligiendo el mismo hueco en el mismo instante pasan las dos la lectura y
+#: pagan las dos por el mismo centímetro de vidrio. `select_for_update` no
+#: alcanza: no hay fila que trabar cuando el lugar está libre.
+#:
+#: ponytail: lock global sobre todo el vidrio. Las compras son raras y el
+#: recurso es uno solo, así que no hace falta granularidad; si algún día hay
+#: cola, la clave puede pasar a ser el hueco.
+GLASS_LOCK_KEY = 815234
 
 
 # ── Visitors ────────────────────────────────────────────────────────────────
@@ -65,8 +78,17 @@ def spots_endpoint(request):
 
     # POST — crea el spot pending y un checkout de DodoPayments
     serializer = SpotSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    spot = serializer.save()
+    with transaction.atomic():
+        if connection.vendor == 'postgresql':
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT pg_advisory_xact_lock(%s)', [GLASS_LOCK_KEY])
+        # Validar y guardar bajo el mismo lock: entre el chequeo de solapamiento
+        # y el insert no puede colarse otra compra.
+        serializer.is_valid(raise_exception=True)
+        spot = serializer.save()
+
+    # El checkout queda FUERA de la transacción: es una llamada de red y no se
+    # tiene una transacción abierta esperando a un tercero.
 
     if settings.FAKE_PAYMENTS:
         # Mismo recorrido que un pago real: el frontend redirige a
@@ -190,6 +212,7 @@ def spot_webhook(request):
                 transaction_id=event['payment_id'] or f'spot-{spot.id}',
                 visitor_id=spot.datafast_visitor_id,
                 name=spot.brand_name,
+                currency=event['currency'],
             )
 
     elif spot and event['is_reversed']:

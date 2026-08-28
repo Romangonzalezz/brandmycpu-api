@@ -178,6 +178,9 @@ def parse_webhook(body: bytes, headers: Mapping[str, str]) -> dict[str, Any]:
         'reference': str(metadata.get('reference', '')),
         'payment_id': str(data.get('payment_id') or ''),
         'amount_cents': int(data.get('settlement_amount') or data.get('total_amount') or 0),
+        # Del pago, no supuesta: reportar USD sobre un cobro en otra moneda
+        # ensucia el globo de ingresos de DataFast.
+        'currency': str(data.get('settlement_currency') or data.get('currency') or 'USD').upper(),
     }
 
 # ── DataFast (Payments API) ─────────────────────────────────────────────────
@@ -188,6 +191,7 @@ def report_payment_to_datafast(
     visitor_id: str = '',
     email: str = '',
     name: str = '',
+    currency: str = 'USD',
 ) -> bool:
     """Reporta un pago confirmado a DataFast para su globo de ingresos.
 
@@ -200,7 +204,7 @@ def report_payment_to_datafast(
 
     payload: dict[str, Any] = {
         'amount': round(amount_cents / 100, 2),
-        'currency': 'USD',
+        'currency': currency or 'USD',
         # Mismo id de pago en cada reintento: DataFast deduplica por acá.
         'transaction_id': transaction_id,
     }

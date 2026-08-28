@@ -137,6 +137,40 @@ class SpotEndpointTests(TestCase):
         self.assertEqual(spot.status, 'confirmed')
         self.assertIn(f'?paid={spot.id}', resp.json()['payment_url'])
 
+    def test_size_decides_the_dimensions_not_the_buyer(self):
+        """Un 'small' de 40x40 cm por $5 sería medio vidrio al precio del
+        hueco más barato. Las medidas las pone el servidor."""
+        with mock.patch.object(
+            services, 'create_checkout',
+            return_value={'checkout_url': 'https://x', 'session_id': 's'},
+        ):
+            resp = self.client.post(
+                reverse('spots-list'),
+                data=json.dumps({
+                    'brand_name': 'Vivo', 'size': 'small', 'offered_price': 5.0,
+                    'website': 'https://vivo.dev',
+                    'width_cm': 40, 'height_cm': 40,
+                }),
+                content_type='application/json',
+            )
+        self.assertEqual(resp.status_code, 201)
+        spot = Spot.objects.get(pk=resp.json()['id'])
+        self.assertEqual((spot.width_cm, spot.height_cm), (4.5, 4.5))
+
+    def test_position_has_to_be_on_the_glass(self):
+        for x, y in [(5.0, 0.5), (-1.0, 0.5), (0.5, 9.0)]:
+            resp = self.client.post(
+                reverse('spots-list'),
+                data=json.dumps({
+                    'brand_name': 'Fuera', 'size': 'small', 'offered_price': 5.0,
+                    'website': 'https://fuera.dev',
+                    'position_x': x, 'position_y': y,
+                }),
+                content_type='application/json',
+            )
+            self.assertEqual(resp.status_code, 400, f'{x},{y} entró')
+        self.assertFalse(Spot.objects.exists())
+
     def test_website_is_required(self):
         """Sin sitio no hay tarjeta de sponsor, así que el spot no se crea."""
         resp = self.client.post(

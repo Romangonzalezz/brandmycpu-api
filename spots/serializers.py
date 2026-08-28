@@ -94,13 +94,19 @@ class SpotSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'size': 'Tamaño no válido.'})
 
         if size:
-            w, h = SIZE_DIMENSIONS[size]
-            attrs.setdefault('width_cm', w)
-            attrs.setdefault('height_cm', h)
+            # Asignadas, no `setdefault`: el precio sale del tamaño, así que si
+            # las medidas las eligiera el comprador, un 'small' de 40x40 cm se
+            # lleva medio vidrio por $5.
+            attrs['width_cm'], attrs['height_cm'] = SIZE_DIMENSIONS[size]
 
-        # Posición normalizada 0-1 (por defecto centrado)
+        # Posición normalizada sobre el vidrio (por defecto centrado).
         attrs.setdefault('position_x', 0.5)
         attrs.setdefault('position_y', 0.5)
+        for axis in ('position_x', 'position_y'):
+            if not 0 <= attrs[axis] <= 1:
+                raise serializers.ValidationError({
+                    axis: 'La posición va de 0 a 1 sobre el vidrio.'
+                })
 
         offered = attrs.pop('offered_price', None)
         if size:
