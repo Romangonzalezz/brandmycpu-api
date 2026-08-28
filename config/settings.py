@@ -8,13 +8,21 @@ from pathlib import Path
 
 import dj_database_url
 from decouple import config
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ── Seguridad ──────────────────────────────────────────────────────────────
-SECRET_KEY = config('DJANGO_SECRET_KEY', default='django-insecure-cambiar-en-produccion')
+INSECURE_SECRET = 'django-insecure-cambiar-en-produccion'
+SECRET_KEY = config('DJANGO_SECRET_KEY', default=INSECURE_SECRET)
 
 DEBUG = config('DEBUG', default=False, cast=bool)
+
+if not DEBUG and SECRET_KEY == INSECURE_SECRET:
+    raise ImproperlyConfigured(
+        'DJANGO_SECRET_KEY sigue en el valor de ejemplo. Generá una y seteala '
+        'en el servicio antes de desplegar.'
+    )
 
 ALLOWED_HOSTS = config(
     'ALLOWED_HOSTS', default='localhost,127.0.0.1,.railway.app'
@@ -69,14 +77,28 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # ── Base de datos: PostgreSQL ───────────────────────────────────────────────
-# soluciona el patrón Railway: un único DATABASE_URL. Sin SQLite.
+# Un único DATABASE_URL, el patrón de Railway. Sin SQLite.
+#
+# Sin la variable NO caemos a localhost en producción: eso hace que un deploy
+# mal configurado muera con un traceback de psycopg contra 127.0.0.1 en vez de
+# decir qué falta.
+DATABASE_URL = config('DATABASE_URL', default='')
+if not DATABASE_URL:
+    if not DEBUG:
+        raise ImproperlyConfigured(
+            'Falta DATABASE_URL. En Railway: agregá un servicio Postgres al '
+            'proyecto y en las Variables de este servicio creá '
+            'DATABASE_URL = ${{Postgres.DATABASE_URL}} (referencia, no el '
+            'valor copiado, así rota sola si Railway cambia la credencial).'
+        )
+    DATABASE_URL = 'postgres://postgres:postgres@localhost:5432/brandmycpu'
+
 DATABASES = {
     'default': dj_database_url.parse(
-        config(
-            'DATABASE_URL',
-            default='postgres://postgres:postgres@localhost:5432/brandmycpu',
-        ),
+        DATABASE_URL,
         conn_max_age=600,
+        # La red privada de Railway no usa SSL. Poné DB_SSL=True sólo si
+        # conectás por la URL pública.
         ssl_require=config('DB_SSL', default=False, cast=bool),
     )
 }
