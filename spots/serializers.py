@@ -102,10 +102,19 @@ class SpotSerializer(serializers.ModelSerializer):
         # Posición normalizada sobre el vidrio (por defecto centrado).
         attrs.setdefault('position_x', 0.5)
         attrs.setdefault('position_y', 0.5)
-        for axis in ('position_x', 'position_y'):
-            if not 0 <= attrs[axis] <= 1:
+
+        # El sticker entero tiene que entrar, no sólo su centro.
+        #
+        # `0 <= centro <= 1` alcanzaba mientras el comprador sólo podía elegir
+        # huecos de la grilla, que nunca caen cerca del filo. Arrastrando libre
+        # sí llega: un small centrado en 0.98 cuelga la mitad fuera del vidrio
+        # y esta validación lo daba por bueno.
+        half_x = attrs['width_cm'] / 100 / GLASS_DEPTH_M / 2
+        half_y = attrs['height_cm'] / 100 / GLASS_HEIGHT_M / 2
+        for axis, half in (('position_x', half_x), ('position_y', half_y)):
+            if not half <= attrs[axis] <= 1 - half:
                 raise serializers.ValidationError({
-                    axis: 'Position must be between 0 and 1 on the glass.'
+                    axis: 'The whole sticker has to fit on the glass.'
                 })
 
         offered = attrs.pop('offered_price', None)

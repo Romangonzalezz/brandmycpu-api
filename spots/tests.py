@@ -157,6 +157,40 @@ class SpotEndpointTests(TestCase):
         spot = Spot.objects.get(pk=resp.json()['id'])
         self.assertEqual((spot.width_cm, spot.height_cm), (4.5, 4.5))
 
+    def test_the_whole_sticker_has_to_fit_on_the_glass(self):
+        """El centro dentro de 0..1 no alcanza: arrastrando libre se llega al
+        filo y medio sticker queda colgando fuera del vidrio."""
+        for x, y in ((0.99, 0.5), (0.01, 0.5), (0.5, 0.99), (0.5, 0.01)):
+            resp = self.client.post(
+                reverse('spots-list'),
+                data=json.dumps({
+                    'brand_name': 'Borde', 'size': 'small', 'offered_price': 5.0,
+                    'website': 'https://borde.dev',
+                    'position_x': x, 'position_y': y,
+                }),
+                content_type='application/json',
+            )
+            self.assertEqual(resp.status_code, 400, (x, y))
+        self.assertFalse(Spot.objects.exists())
+
+    def test_a_free_position_off_the_grid_is_allowed(self):
+        """La grilla es del frontend. El backend sólo pide que entre y que no
+        pise a nadie, asi que arrastrar a cualquier punto libre vale."""
+        with mock.patch.object(
+            services, 'create_checkout',
+            return_value={'checkout_url': 'https://x', 'session_id': 's'},
+        ):
+            resp = self.client.post(
+                reverse('spots-list'),
+                data=json.dumps({
+                    'brand_name': 'Libre', 'size': 'small', 'offered_price': 5.0,
+                    'website': 'https://libre.dev',
+                    'position_x': 0.4137, 'position_y': 0.6289,
+                }),
+                content_type='application/json',
+            )
+        self.assertEqual(resp.status_code, 201)
+
     def test_position_has_to_be_on_the_glass(self):
         for x, y in [(5.0, 0.5), (-1.0, 0.5), (0.5, 9.0)]:
             resp = self.client.post(
