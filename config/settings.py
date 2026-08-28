@@ -8,13 +8,21 @@ from pathlib import Path
 
 import dj_database_url
 from decouple import config
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ── Seguridad ──────────────────────────────────────────────────────────────
-SECRET_KEY = config('DJANGO_SECRET_KEY', default='django-insecure-cambiar-en-produccion')
+INSECURE_SECRET = 'django-insecure-cambiar-en-produccion'
+SECRET_KEY = config('DJANGO_SECRET_KEY', default=INSECURE_SECRET)
 
 DEBUG = config('DEBUG', default=False, cast=bool)
+
+if not DEBUG and SECRET_KEY == INSECURE_SECRET:
+    raise ImproperlyConfigured(
+        'DJANGO_SECRET_KEY sigue en el valor de ejemplo. Generá una y seteala '
+        'en el servicio antes de desplegar.'
+    )
 
 ALLOWED_HOSTS = config(
     'ALLOWED_HOSTS', default='localhost,127.0.0.1,.railway.app'
@@ -69,14 +77,28 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # ── Base de datos: PostgreSQL ───────────────────────────────────────────────
-# soluciona el patrón Railway: un único DATABASE_URL. Sin SQLite.
+# Un único DATABASE_URL, el patrón de Railway. Sin SQLite.
+#
+# Sin la variable NO caemos a localhost en producción: eso hace que un deploy
+# mal configurado muera con un traceback de psycopg contra 127.0.0.1 en vez de
+# decir qué falta.
+DATABASE_URL = config('DATABASE_URL', default='')
+if not DATABASE_URL:
+    if not DEBUG:
+        raise ImproperlyConfigured(
+            'Falta DATABASE_URL. En Railway: agregá un servicio Postgres al '
+            'proyecto y en las Variables de este servicio creá '
+            'DATABASE_URL = ${{Postgres.DATABASE_URL}} (referencia, no el '
+            'valor copiado, así rota sola si Railway cambia la credencial).'
+        )
+    DATABASE_URL = 'postgres://postgres:postgres@localhost:5432/brandmycpu'
+
 DATABASES = {
     'default': dj_database_url.parse(
-        config(
-            'DATABASE_URL',
-            default='postgres://postgres:postgres@localhost:5432/brandmycpu',
-        ),
+        DATABASE_URL,
         conn_max_age=600,
+        # La red privada de Railway no usa SSL. Poné DB_SSL=True sólo si
+        # conectás por la URL pública.
         ssl_require=config('DB_SSL', default=False, cast=bool),
     )
 }
@@ -136,13 +158,19 @@ LOGGING = {
 # ── DodoPayments ────────────────────────────────────────────────────────────
 DODO_API_KEY = config('DODO_API_KEY', default='')
 # Id del producto pay-what-you-want en el dashboard de Dodo
-DODO_PRODUCT_ID = config('DODO_PRODUCT_ID', default='')
+DODO_PRODUCT_ID = config(
+    'DODO_PRODUCT_ID', default='pdt_0NmNXr1VG164viZhNZCXL'
+)
 # Secreto del webhook (formato whsec_<base64>)
 DODO_WEBHOOK_SECRET = config('DODO_WEBHOOK_SECRET', default='')
 # 'test' | 'live'
 DODO_SERVER = config('DODO_SERVER', default='test')
 # URL a la que Dodo redirige a quien paga (poseída por el frontend)
 DODO_RETURN_URL = config('DODO_RETURN_URL', default='http://localhost:5173')
+
+# ── DataFast ────────────────────────────────────────────────────────────────
+# Clave de la Payments API (df_...). Vacía = no se reporta nada.
+DATAFAST_API_KEY = config('DATAFAST_API_KEY', default='')
 
 # Objetivo de recaudación en centavos de dólar ($800 = salir de iGPU)
 SPOT_GOAL = config('SPOT_GOAL', default=80000, cast=int)

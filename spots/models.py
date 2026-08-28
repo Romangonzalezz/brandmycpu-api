@@ -1,4 +1,8 @@
+from django.core.validators import FileExtensionValidator
 from django.db import models
+
+# Formatos que aceptamos tal cual del comprador (no se reprocesan).
+LOGO_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'svg']
 
 
 class Spot(models.Model):
@@ -16,7 +20,23 @@ class Spot(models.Model):
     ]
 
     brand_name = models.CharField(max_length=100)
-    logo = models.ImageField(upload_to='logos/', null=True, blank=True)
+    # Sitio del sponsor: se muestra al pasar el mouse sobre su sticker.
+    website = models.URLField(max_length=300, blank=True)
+    # Usuario de X, sin arroba. Opcional.
+    x_handle = models.CharField(max_length=15, blank=True)
+    # Cookie de DataFast: sin ella el pago aparece en su globo pero sin
+    # canal de origen.
+    datafast_visitor_id = models.CharField(max_length=100, blank=True)
+    # FileField y no ImageField: el SVG es un formato aceptado y Pillow no
+    # lo valida. Nota de seguridad: un SVG servido desde el mismo dominio
+    # puede ejecutar scripts, así que MEDIA debería salir por otro host o
+    # con Content-Disposition: attachment.
+    logo = models.FileField(
+        upload_to='logos/',
+        null=True,
+        blank=True,
+        validators=[FileExtensionValidator(LOGO_EXTENSIONS)],
+    )
     size = models.CharField(max_length=10, choices=SIZE_CHOICES)
     width_cm = models.FloatField()
     height_cm = models.FloatField()

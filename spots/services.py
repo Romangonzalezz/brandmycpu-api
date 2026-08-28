@@ -28,8 +28,19 @@ logger = logging.getLogger('brandmycpu.dodo')
 MAX_SIGNATURE_AGE_SECONDS = 300
 REQUEST_TIMEOUT_SECONDS = 15
 
+DATAFAST_PAYMENTS_URL = 'https://datafa.st/api/v1/payments'
+
 SUCCESS_EVENTS = {'payment.succeeded'}
+
+#: El pago nunca entró. Sólo aplica si el spot todavía no está confirmado: un
+#: `failed` que llega tarde no puede tumbar un cobro que sí prosperó.
 FAILURE_EVENTS = {'payment.failed', 'payment.cancelled'}
+
+#: La plata se va después de haber entrado. Esto SÍ revierte un spot
+#: confirmado: si no, un reembolso queda contando en el goal para siempre y el
+#: sticker se imprime igual. Una disputa se puede ganar; mientras esté abierta
+#: no la contamos, y si se resuelve a favor se vuelve a confirmar a mano.
+REVERSAL_EVENTS = {'refund.succeeded', 'dispute.opened'}
 
 
 class PaymentError(Exception):
@@ -163,7 +174,58 @@ def parse_webhook(body: bytes, headers: Mapping[str, str]) -> dict[str, Any]:
         'event_type': event_type,
         'is_succeeded': event_type in SUCCESS_EVENTS,
         'is_failed': event_type in FAILURE_EVENTS,
+        'is_reversed': event_type in REVERSAL_EVENTS,
         'reference': str(metadata.get('reference', '')),
         'payment_id': str(data.get('payment_id') or ''),
         'amount_cents': int(data.get('settlement_amount') or data.get('total_amount') or 0),
     }
+
+# ── DataFast (Payments API) ─────────────────────────────────────────────────
+def report_payment_to_datafast(
+    *,
+    amount_cents: int,
+    transaction_id: str,
+    visitor_id: str = '',
+    email: str = '',
+    name: str = '',
+) -> bool:
+    """Reporta un pago confirmado a DataFast para su globo de ingresos.
+
+    Best-effort: DataFast es analítica, no puede tumbar la confirmación de un
+    spot ya pagado. Devuelve True sólo si el POST salió bien.
+    """
+    api_key = settings.DATAFAST_API_KEY
+    if not api_key:
+        return False
+
+    payload: dict[str, Any] = {
+        'amount': round(amount_cents / 100, 2),
+        'currency': 'USD',
+        # Mismo id de pago en cada reintento: DataFast deduplica por acá.
+        'transaction_id': transaction_id,
+    }
+    if visitor_id:
+        payload['datafast_visitor_id'] = visitor_id
+    if email:
+        payload['email'] = email
+    if name:
+        payload['customer_name'] = name
+
+    try:
+        response = requests.post(
+            DATAFAST_PAYMENTS_URL,
+            json=payload,
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        logger.warning('DataFast no recibió el pago %s: %s', transaction_id, exc)
+        return False
+
+    if response.status_code >= 400:
+        logger.warning(
+            'DataFast rechazó el pago %s (%s): %s',
+            transaction_id, response.status_code, response.text[:200],
+        )
+        return False
+    return True
