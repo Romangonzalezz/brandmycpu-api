@@ -57,7 +57,11 @@ def spots_endpoint(request):
         state = request.query_params.get('status')
         if state in dict(Spot.STATUS_CHOICES):
             queryset = queryset.filter(status=state)
-        return Response(SpotSerializer(queryset, many=True).data)
+        # El context lleva el request: sin él logo_url sale relativa y el
+        # frontend, que vive en otro dominio, la resuelve contra sí mismo.
+        return Response(
+            SpotSerializer(queryset, many=True, context={'request': request}).data
+        )
 
     # POST — crea el spot pending y un checkout de DodoPayments
     serializer = SpotSerializer(data=request.data)

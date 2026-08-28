@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import tempfile
 import time
 from datetime import timedelta
 from unittest import mock
@@ -70,6 +71,7 @@ class VisitorEndpointsTests(TestCase):
         self.assertEqual(resp.json()['total'], 3)
 
 
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class SpotEndpointTests(TestCase):
     def test_create_spot_returns_payment_url(self):
         with mock.patch.object(
@@ -128,6 +130,101 @@ class SpotEndpointTests(TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn('website', resp.json())
         self.assertFalse(Spot.objects.exists())
+
+    def test_cannot_buy_a_spot_that_overlaps_a_sold_one(self):
+        """Un small encima de un large ya vendido se rechaza en el backend.
+
+        El frontend esconde el hueco, pero eso corre en el navegador del
+        comprador: dos sponsors pagando el mismo centímetro de vidrio no se
+        puede cumplir.
+        """
+        Spot.objects.create(
+            brand_name='Grande', size='large', width_cm=9.5, height_cm=4.0,
+            position_x=0.5, position_y=0.5, price_paid=2000, status='confirmed',
+        )
+        resp = self.client.post(
+            reverse('spots-list'),
+            data=json.dumps({
+                'brand_name': 'Chico', 'size': 'small', 'offered_price': 5.0,
+                'website': 'https://chico.dev',
+                'position_x': 0.5, 'position_y': 0.5,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('position_x', resp.json())
+        self.assertEqual(Spot.objects.count(), 1)
+
+    def test_a_free_corner_next_to_it_still_works(self):
+        Spot.objects.create(
+            brand_name='Grande', size='large', width_cm=9.5, height_cm=4.0,
+            position_x=0.5, position_y=0.5, price_paid=2000, status='confirmed',
+        )
+        with mock.patch.object(
+            services, 'create_checkout',
+            return_value={'checkout_url': 'https://x', 'session_id': 's'},
+        ):
+            resp = self.client.post(
+                reverse('spots-list'),
+                data=json.dumps({
+                    'brand_name': 'Chico', 'size': 'small', 'offered_price': 5.0,
+                    'website': 'https://chico.dev',
+                    'position_x': 0.1, 'position_y': 0.1,
+                }),
+                content_type='application/json',
+            )
+        self.assertEqual(resp.status_code, 201)
+
+    def test_abandoned_checkout_frees_the_spot_again(self):
+        """Un pending viejo no puede bloquear un hueco para siempre."""
+        old = Spot.objects.create(
+            brand_name='Fantasma', size='small', width_cm=4.5, height_cm=4.5,
+            position_x=0.5, position_y=0.5, price_paid=500, status='pending',
+        )
+        Spot.objects.filter(pk=old.pk).update(
+            created_at=timezone.now() - timedelta(hours=2)
+        )
+        with mock.patch.object(
+            services, 'create_checkout',
+            return_value={'checkout_url': 'https://x', 'session_id': 's'},
+        ):
+            resp = self.client.post(
+                reverse('spots-list'),
+                data=json.dumps({
+                    'brand_name': 'Real', 'size': 'small', 'offered_price': 5.0,
+                    'website': 'https://real.dev',
+                    'position_x': 0.5, 'position_y': 0.5,
+                }),
+                content_type='application/json',
+            )
+        self.assertEqual(resp.status_code, 201)
+
+    def test_a_checkout_in_progress_holds_the_spot(self):
+        Spot.objects.create(
+            brand_name='Comprando', size='small', width_cm=4.5, height_cm=4.5,
+            position_x=0.5, position_y=0.5, price_paid=500, status='pending',
+        )
+        resp = self.client.post(
+            reverse('spots-list'),
+            data=json.dumps({
+                'brand_name': 'Otro', 'size': 'small', 'offered_price': 5.0,
+                'website': 'https://otro.dev',
+                'position_x': 0.5, 'position_y': 0.5,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_logo_url_is_absolute(self):
+        """Relativa se resolvería contra el dominio del frontend, no la API."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        Spot.objects.create(
+            brand_name='ConLogo', size='small', width_cm=4.5, height_cm=4.5,
+            price_paid=500, status='placed',
+            logo=SimpleUploadedFile('l.png', b'x', content_type='image/png'),
+        )
+        url = self.client.get(reverse('spots-list')).json()[0]['logo_url']
+        self.assertTrue(url.startswith('http://testserver/media/logos/'), url)
 
     def test_price_below_minimum_rejected(self):
         resp = self.client.post(

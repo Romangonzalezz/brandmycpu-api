@@ -1,6 +1,29 @@
+from datetime import timedelta
+
+from django.utils import timezone
 from rest_framework import serializers
 
 from .models import Spot
+
+# Vidrio real, en metros. Tiene que coincidir con GLASS_* de CaseViewer.jsx.
+GLASS_DEPTH_M = 0.407
+GLASS_HEIGHT_M = 0.410
+OVERLAP_MARGIN = 0.01
+
+#: Un `pending` es un checkout abierto. Le reservamos el lugar un rato para que
+#: dos personas no paguen por el mismo, pero no para siempre: quien abandona no
+#: puede bloquear un hueco eternamente.
+RESERVATION_MINUTES = 30
+
+
+def _overlaps(ax, ay, aw, ah, bx, by, bw, bh):
+    """Dos stickers centrados se pisan si se solapan en ambos ejes."""
+    ex_a, ey_a = aw / 100 / GLASS_DEPTH_M, ah / 100 / GLASS_HEIGHT_M
+    ex_b, ey_b = bw / 100 / GLASS_DEPTH_M, bh / 100 / GLASS_HEIGHT_M
+    return (
+        abs(ax - bx) < (ex_a + ex_b) / 2 + OVERLAP_MARGIN
+        and abs(ay - by) < (ey_a + ey_b) / 2 + OVERLAP_MARGIN
+    )
 
 # Dimensiones por tamaño (cm) — tabla de precio del brief
 SIZE_DIMENSIONS = {
@@ -57,7 +80,13 @@ class SpotSerializer(serializers.ModelSerializer):
         }
 
     def get_logo_url(self, obj):
-        return obj.logo_url
+        """URL absoluta: el frontend vive en otro dominio y una ruta relativa
+        se resolvería contra él, no contra la API."""
+        url = obj.logo_url
+        if not url:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(url) if request else url
 
     def validate(self, attrs):
         size = attrs.get('size')
@@ -93,6 +122,26 @@ class SpotSerializer(serializers.ModelSerializer):
 
         if attrs['price_paid'] <= 0:
             raise serializers.ValidationError({'price_paid': 'Precio inválido.'})
+
+        # El frontend ya esconde los huecos ocupados, pero es el navegador del
+        # comprador: acá se decide. Sin esto dos sponsors pueden pagar por el
+        # mismo centímetro de vidrio y no hay forma de cumplirle a los dos.
+        cutoff = timezone.now() - timedelta(minutes=RESERVATION_MINUTES)
+        taken = Spot.objects.filter(status__in=['confirmed', 'placed']) | (
+            Spot.objects.filter(status='pending', created_at__gte=cutoff)
+        )
+        for other in taken.distinct():
+            if _overlaps(
+                attrs['position_x'], attrs['position_y'],
+                attrs['width_cm'], attrs['height_cm'],
+                other.position_x, other.position_y,
+                other.width_cm, other.height_cm,
+            ):
+                raise serializers.ValidationError({
+                    'position_x': 'Ese lugar del vidrio ya está tomado. '
+                                  'Elegí otro hueco.'
+                })
+
         return attrs
 
 
