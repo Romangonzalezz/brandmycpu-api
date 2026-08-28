@@ -250,36 +250,41 @@ class GoalTests(TestCase):
             self.assertEqual(body['raised'], 500)
             self.assertEqual(body['percentage'], 50)
 
-# Payload textual de un payment.succeeded real de Dodo (otra app del mismo
-# dueño, $1 con Apple Pay). Sirve para verificar el parseo contra la forma
-# que Dodo manda de verdad, no contra la que suponemos.
+# Forma real de un `payment.succeeded` de Dodo, con los datos reemplazados por
+# inventados: lo que hay que fijar acá es la ESTRUCTURA (dónde vive la
+# reference, que los montos son centavos, dónde está el payment_id), no los
+# ids ni los datos de facturación de nadie.
+#
+# Los campos que no leemos están igual a propósito: si Dodo agrega o renombra
+# algo alrededor, el test sigue pasando y nos dice que nuestro parseo sólo
+# depende de lo que realmente usa.
 REAL_DODO_PAYLOAD = {
     "data": {
         "tax": 0,
         "status": "succeeded",
-        "billing": {"city": "Wyoming", "state": "Wyoming", "street": "wer",
-                    "country": "US", "zipcode": "82009"},
+        "billing": {"city": "Springfield", "state": "Oregon", "street": "1 Test St",
+                    "country": "US", "zipcode": "97477"},
         "refunds": [],
-        "brand_id": "bus_0Nm3c5EwuFp5rhFM4ZJNy",
+        "brand_id": "bus_testbusiness000000",
         "currency": "USD",
-        "customer": {"name": "Pushup RPG", "email": "support@pushup.quest",
-                     "metadata": {}, "customer_id": "cus_0NmG8eb0HStydAb1lgikq",
+        "customer": {"name": "Test Brand", "email": "buyer@example.com",
+                     "metadata": {}, "customer_id": "cus_testcustomer000000",
                      "phone_number": None},
         "disputes": [],
-        "metadata": {"host": "pushup.quest",
+        "metadata": {"host": "example.com",
                      "reference": "62f88772-538a-4e85-9e00-3d0c2969afae"},
         "card_type": None,
         "discounts": None,
         "created_at": "2026-08-26T22:31:21.560290Z",
         "error_code": None,
-        "invoice_id": "inv_0NmG8eb3Jc1NwTytJDNy8",
-        "payment_id": "pay_0NmG8eb3Jc1NwTyinu1v8",
+        "invoice_id": "inv_testinvoice0000000",
+        "payment_id": "pay_testpayment0000000",
         "updated_at": None,
-        "business_id": "bus_0Nm3c5EwuFp5rhFM4ZJNy",
+        "business_id": "bus_testbusiness000000",
         "discount_id": None,
         "card_network": None,
         "payload_type": "Payment",
-        "product_cart": [{"quantity": 1, "product_id": "pdt_0Nm6khiwPduEop0B7mKlH"}],
+        "product_cart": [{"quantity": 1, "product_id": "pdt_testproduct0000000"}],
         "total_amount": 100,
         "error_message": None,
         "refund_status": None,
@@ -292,7 +297,7 @@ REAL_DODO_PAYLOAD = {
         "payment_provider": "dodo",
         "payment_method_id": None,
         "settlement_amount": 100,
-        "checkout_session_id": "cks_0NmG8YThxT8OKxt7IHqyj",
+        "checkout_session_id": "cks_testcheckout000000",
         "payment_method_type": "apple_pay",
         "settlement_currency": "USD",
         "card_issuing_country": None,
@@ -302,7 +307,7 @@ REAL_DODO_PAYLOAD = {
     },
     "type": "payment.succeeded",
     "timestamp": "2026-08-26T22:31:49.847323Z",
-    "business_id": "bus_0Nm3c5EwuFp5rhFM4ZJNy",
+    "business_id": "bus_testbusiness000000",
 }
 
 SECRET = 'whsec_' + base64.b64encode(b'0123456789abcdef').decode()
@@ -334,7 +339,7 @@ class RealDodoPayloadTests(TestCase):
         self.assertEqual(event['event_type'], 'payment.succeeded')
         self.assertTrue(event['is_succeeded'])
         self.assertFalse(event['is_failed'])
-        self.assertEqual(event['payment_id'], 'pay_0NmG8eb3Jc1NwTyinu1v8')
+        self.assertEqual(event['payment_id'], 'pay_testpayment0000000')
         # La referencia vuelve del metadata que mandamos en el checkout.
         self.assertEqual(event['reference'], '62f88772-538a-4e85-9e00-3d0c2969afae')
         # Dodo manda centavos: $1 = 100.
@@ -354,7 +359,7 @@ class RealDodoPayloadTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         spot.refresh_from_db()
         self.assertEqual(spot.status, 'confirmed')
-        self.assertEqual(spot.payment_id, 'pay_0NmG8eb3Jc1NwTyinu1v8')
+        self.assertEqual(spot.payment_id, 'pay_testpayment0000000')
 
     def test_unknown_reference_is_accepted_and_ignored(self):
         """Un UUID de otra app no es nuestro id: no explota ni toca nada."""
@@ -379,7 +384,7 @@ class RealDodoPayloadTests(TestCase):
         self.assertEqual(mocked.call_count, 1)
         kwargs = mocked.call_args.kwargs
         self.assertEqual(kwargs['amount_cents'], 100)
-        self.assertEqual(kwargs['transaction_id'], 'pay_0NmG8eb3Jc1NwTyinu1v8')
+        self.assertEqual(kwargs['transaction_id'], 'pay_testpayment0000000')
         self.assertEqual(kwargs['visitor_id'], 'visitor-abc')
 
     def _confirmed_spot(self):
