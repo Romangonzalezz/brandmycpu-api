@@ -48,6 +48,7 @@ class SpotSerializer(serializers.ModelSerializer):
     """
 
     logo_url = serializers.SerializerMethodField()
+    placed_photo_url = serializers.SerializerMethodField()
     offered_price = serializers.FloatField(
         write_only=True, required=False, min_value=0
     )
@@ -56,12 +57,14 @@ class SpotSerializer(serializers.ModelSerializer):
         model = Spot
         fields = [
             'id', 'brand_name', 'website', 'x_handle', 'logo', 'logo_url',
+            'placed_photo_url',
             'size', 'width_cm',
             'height_cm', 'position_x', 'position_y', 'price_paid', 'status',
             'created_at', 'offered_price', 'datafast_visitor_id',
         ]
         read_only_fields = [
-            'id', 'logo_url', 'price_paid', 'status', 'created_at',
+            'id', 'logo_url', 'placed_photo_url', 'price_paid', 'status',
+            'created_at',
         ]
         extra_kwargs = {
             # El comprador adjunta el logo tal cual: se guarda sin reprocesar.
@@ -78,6 +81,13 @@ class SpotSerializer(serializers.ModelSerializer):
             'position_x': {'required': False},
             'position_y': {'required': False},
         }
+
+    def get_placed_photo_url(self, obj):
+        url = obj.placed_photo_url
+        if not url:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(url) if request else url
 
     def get_logo_url(self, obj):
         """URL absoluta: el frontend vive en otro dominio y una ruta relativa

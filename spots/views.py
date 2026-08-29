@@ -180,8 +180,13 @@ def spots_endpoint(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def spot_activity(request):
-    """Últimos spots confirmados (feed). Paginado simple por `page`."""
-    queryset = Spot.objects.filter(status='confirmed')
+    """Últimos spots comprados (feed). Paginado simple por `page`.
+
+    Incluye `placed`. Filtrar sólo `confirmed` hacía que un sticker
+    desapareciera del feed justo cuando se lo pegaba de verdad: la lista se
+    vaciaba a medida que se cumplían los pedidos.
+    """
+    queryset = Spot.objects.filter(status__in=['confirmed', 'placed'])
     try:
         page = max(1, int(request.query_params.get('page', 1)))
         page_size = min(50, int(request.query_params.get('page_size', 10)))

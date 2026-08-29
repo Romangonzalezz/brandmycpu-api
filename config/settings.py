@@ -121,7 +121,18 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+
+# El disco de un contenedor es efímero: sin volumen, cada deploy borra el logo
+# de todos los sponsors que pagaron. Railway inyecta RAILWAY_VOLUME_MOUNT_PATH
+# cuando hay uno montado, así que basta con montarlo para que esto lo tome.
+#
+# `manage.py seed_media` copia ahí lo que venga versionado en el repo: un
+# volumen se monta vacío y tapa el directorio que traía la imagen.
+MEDIA_ROOT = Path(
+    config('MEDIA_ROOT', default='')
+    or config('RAILWAY_VOLUME_MOUNT_PATH', default='')
+    or BASE_DIR / 'media'
+)
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

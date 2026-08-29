@@ -429,18 +429,46 @@ class SpotEndpointTests(TestCase):
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]['brand_name'], 'A')
 
-    def test_activity_returns_only_confirmed(self):
-        Spot.objects.create(
-            brand_name='C1', size='medium', status='confirmed', price_paid=1200,
-            width_cm=6.0, height_cm=5.0,
+    def test_activity_shows_what_was_bought_and_nothing_else(self):
+        """`placed` cuenta. Filtrar sólo `confirmed` sacaba del feed a un
+        sticker justo cuando se lo pegaba de verdad, así que la lista se
+        vaciaba a medida que se cumplían los pedidos."""
+        for name, status in (
+            ('C1', 'confirmed'),
+            ('Pegado', 'placed'),
+            ('P', 'pending'),
+            ('Perdido', 'outbid'),
+        ):
+            Spot.objects.create(
+                brand_name=name, size='small', status=status, price_paid=500,
+                width_cm=4.5, height_cm=4.5,
+            )
+        body = self.client.get(reverse('spots-activity')).json()
+        self.assertEqual(body['count'], 2)
+        self.assertEqual(
+            {r['brand_name'] for r in body['results']}, {'C1', 'Pegado'}
         )
-        Spot.objects.create(
-            brand_name='P', size='small', status='pending', price_paid=500,
+
+    def test_the_proof_photo_reaches_the_page(self):
+        """Sin esto `status='placed'` es sólo una afirmación mía."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        png = base64.b64decode(
+            b'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQ'
+            b'DwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+        )
+        s = Spot.objects.create(
+            brand_name='ConFoto', size='small', status='placed', price_paid=500,
             width_cm=4.5, height_cm=4.5,
         )
-        resp = self.client.get(reverse('spots-activity'))
-        self.assertEqual(resp.json()['count'], 1)
-        self.assertEqual(resp.json()['results'][0]['brand_name'], 'C1')
+        s.placed_photo = SimpleUploadedFile('glass.png', png, content_type='image/png')
+        s.save()
+
+        row = next(
+            r for r in self.client.get(reverse('spots-list')).json()
+            if r['brand_name'] == 'ConFoto'
+        )
+        self.assertTrue(row['placed_photo_url'].startswith('http'))
+        self.assertIn('placed/', row['placed_photo_url'])
 
 
 class WebhookTests(TestCase):

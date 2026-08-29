@@ -40,6 +40,12 @@ class Spot(models.Model):
         blank=True,
         validators=[FileExtensionValidator(LOGO_EXTENSIONS)],
     )
+    # La foto del sticker ya pegado en el vidrio.
+    #
+    # `status='placed'` es una afirmación mía y nada más. Esto es la prueba, y
+    # en un producto donde el comprador paga por algo físico que no puede ver,
+    # es lo único que convierte la promesa en evidencia. La sube el admin.
+    placed_photo = models.ImageField(upload_to='placed/', null=True, blank=True)
     size = models.CharField(max_length=10, choices=SIZE_CHOICES)
     width_cm = models.FloatField()
     height_cm = models.FloatField()
@@ -63,6 +69,12 @@ class Spot(models.Model):
 
     def __str__(self):
         return f"{self.brand_name or '—'} ({self.size}) @ {self.position_x:.2f},{self.position_y:.2f}"
+
+    @property
+    def placed_photo_url(self):
+        if self.placed_photo and hasattr(self.placed_photo, 'url'):
+            return self.placed_photo.url
+        return None
 
     @property
     def logo_url(self):
