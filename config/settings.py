@@ -196,3 +196,13 @@ DATAFAST_API_KEY = config('DATAFAST_API_KEY', default='')
 
 # Objetivo de recaudación en centavos de dólar ($800 = salir de iGPU)
 SPOT_GOAL = config('SPOT_GOAL', default=80000, cast=int)
+
+# Sal para el hash de IP de los clicks. Sin ella el hash de una IPv4 se
+# revierte por fuerza bruta sobre 4 mil millones de direcciones, o sea que no
+# es un hash.
+IP_HASH_SALT = config('IP_HASH_SALT', default=SECRET_KEY)
+
+# Cuántos lugares se regalan, en total. Cero por defecto a propósito: una
+# campaña que terminó se apaga bajando esto, y un deploy sin configurar no
+# empieza a repartir vidrio gratis por su cuenta.
+GIVEAWAY_SEATS = config('GIVEAWAY_SEATS', default=0, cast=int)

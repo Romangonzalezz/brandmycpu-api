@@ -2,8 +2,8 @@ import logging
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import connection, transaction
-from django.db.models import Sum
+from django.db import IntegrityError, connection, transaction
+from django.db.models import F, Sum
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import serializers, status
@@ -12,12 +12,15 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from . import services
-from .models import Spot, Visitor
+from .common import client_ip, hash_ip
+from .models import Click, Giveaway, Spot, Visitor
+from .tweets import TweetError, phrase_for, verify_tweet
 from .serializers import (
     ActivitySerializer,
     GoalSerializer,
     SpotSerializer,
     _overlaps,
+    validate_placement,
 )
 
 logger = logging.getLogger('brandmycpu.api')
@@ -284,6 +287,143 @@ def spot_webhook(request):
             updated = True
 
     return Response({'ok': True, 'updated': updated})
+
+
+# ── Clicks ──────────────────────────────────────────────────────────────────
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def spot_click(request, pk):
+    """Registra un click saliente hacia el sitio de un sponsor.
+
+    Uno por dirección y por spot, para siempre. El constraint de Click lo
+    garantiza: chequear antes e insertar después deja pasar dos clicks
+    simultáneos de la misma IP, y acá el número es lo que un sponsor mira para
+    decidir si le sirvió, así que tiene que ser exacto y no aproximado.
+
+    Contesta 200 siempre. Que un click sea repetido no es un error del
+    visitante y el navegador ya está yéndose a otro sitio: un 4xx acá sólo
+    ensucia la consola de alguien que hizo todo bien.
+    """
+    spot = Spot.objects.filter(pk=pk, status__in=['confirmed', 'placed']).first()
+    if spot is None:
+        return Response({'ok': False, 'counted': False})
+
+    ip_hash = hash_ip(client_ip(request))
+    try:
+        with transaction.atomic():
+            Click.objects.create(spot=spot, ip_hash=ip_hash)
+            Spot.objects.filter(pk=spot.pk).update(clicks_count=F('clicks_count') + 1)
+    except IntegrityError:
+        # Ya había clickeado. No es un error, es la regla funcionando.
+        return Response({'ok': True, 'counted': False})
+
+    return Response({'ok': True, 'counted': True})
+
+
+# ── Giveaway ────────────────────────────────────────────────────────────────
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
+def giveaway(request):
+    """Los lugares gratis del vidrio.
+
+    GET dice cuántos quedan y qué hay que postear. POST toma uno.
+    """
+    taken = Giveaway.objects.count()
+    seats_left = max(0, settings.GIVEAWAY_SEATS - taken)
+
+    if request.method == 'GET':
+        return Response({
+            'seats': settings.GIVEAWAY_SEATS,
+            'seatsLeft': seats_left,
+            'nextSeat': taken + 1 if seats_left else None,
+            'phrase': phrase_for(taken + 1) if seats_left else '',
+        })
+
+    if seats_left <= 0:
+        return Response(
+            {'error': 'The free spots are gone.', 'seatsLeft': 0},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    data = request.data
+    seat = taken + 1
+
+    # La geometría se valida con la MISMA función que la compra. Un lugar
+    # gratis no puede tener reglas distintas a uno pago, y no puede pisar a
+    # alguien que puso plata.
+    try:
+        width_cm, height_cm, _ = validate_placement(
+            data.get('size'),
+            float(data.get('position_x', 0.5)),
+            float(data.get('position_y', 0.5)),
+        )
+    except (TypeError, ValueError):
+        return Response(
+            {'error': 'That position is not on the glass.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not (data.get('brand_name') or '').strip():
+        return Response({'error': 'Enter your brand name.'}, status=400)
+    if not (data.get('website') or '').strip():
+        return Response({'error': 'Enter the website your sticker links to.'}, status=400)
+    if not request.FILES.get('logo'):
+        return Response({'error': 'Attach the logo that goes on the sticker.'}, status=400)
+
+    # El post se verifica ANTES de escribir nada: si no prueba lo que tiene que
+    # probar, no se gastó un asiento ni quedó un Spot huérfano en el vidrio.
+    try:
+        tweet = verify_tweet(tweet_url=data.get('tweet_url', ''), seat=seat)
+    except TweetError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        with transaction.atomic():
+            if connection.vendor == 'postgresql':
+                with connection.cursor() as cursor:
+                    cursor.execute('SELECT pg_advisory_xact_lock(%s)', [GLASS_LOCK_KEY])
+            spot = Spot.objects.create(
+                brand_name=data['brand_name'].strip()[:100],
+                website=data['website'].strip()[:300],
+                x_handle=(data.get('x_handle') or tweet.author_handle or '')[:15],
+                logo=request.FILES['logo'],
+                size=data['size'],
+                width_cm=width_cm,
+                height_cm=height_cm,
+                position_x=float(data.get('position_x', 0.5)),
+                position_y=float(data.get('position_y', 0.5)),
+                # Cero, y a propósito: no se pagó nada, así que esto no puede
+                # llegar al goal. El vidrio va a decir más stickers que dólares.
+                price_paid=0,
+                status='confirmed',
+            )
+            # El asiento es el control de concurrencia. Si dos personas
+            # reclaman el último a la vez, la base tumba a una acá y ninguna se
+            # lleva un lugar que no existía.
+            Giveaway.objects.create(
+                spot=spot,
+                seat=seat,
+                tweet_id=tweet.tweet_id,
+                tweet_handle=tweet.author_handle,
+                email=(data.get('email') or '').strip()[:254],
+                ip_hash=hash_ip(client_ip(request)),
+            )
+    except IntegrityError:
+        return Response(
+            {'error': 'Somebody just took that spot. Reload and try the next one.',
+             'seatsLeft': max(0, settings.GIVEAWAY_SEATS - Giveaway.objects.count())},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    logger.warning('Giveaway: asiento %s -> spot %s (@%s)', seat, spot.id, tweet.author_handle)
+    return Response(
+        {
+            'id': spot.id,
+            'seat': seat,
+            'seatsLeft': max(0, settings.GIVEAWAY_SEATS - Giveaway.objects.count()),
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 # ── Goal / progreso ────────────────────────────────────────────────────────

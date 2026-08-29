@@ -40,6 +40,63 @@ SIZE_MIN_PRICE_CENTS = {
 }
 
 
+def validate_placement(size, position_x, position_y, *, allow_paid_overlap=False):
+    """Las reglas del vidrio, sin las del dinero.
+
+    Vive suelta porque la usan dos caminos: la compra, que además tiene precio
+    mínimo y outbid, y el giveaway, que no tiene precio ninguno. Copiarla habría
+    dejado al lugar gratis con reglas distintas a las del pago.
+
+    Devuelve (width_cm, height_cm) y levanta ValidationError con el campo que
+    corresponde.
+    """
+    if size not in SIZE_DIMENSIONS:
+        raise serializers.ValidationError({'size': 'That size is not valid.'})
+    w, h = SIZE_DIMENSIONS[size]
+
+    for axis, value in (('position_x', position_x), ('position_y', position_y)):
+        if not 0 <= value <= 1:
+            raise serializers.ValidationError({
+                axis: 'Position must be between 0 and 1 on the glass.'
+            })
+
+    half_x = w / 100 / GLASS_DEPTH_M / 2
+    half_y = h / 100 / GLASS_HEIGHT_M / 2
+    for axis, value, half in (
+        ('position_x', position_x, half_x),
+        ('position_y', position_y, half_y),
+    ):
+        if not half <= value <= 1 - half:
+            raise serializers.ValidationError({
+                axis: 'The whole sticker has to fit on the glass.'
+            })
+
+    def hits(other):
+        return _overlaps(
+            position_x, position_y, w, h,
+            other.position_x, other.position_y, other.width_cm, other.height_cm,
+        )
+
+    cutoff = timezone.now() - timedelta(minutes=RESERVATION_MINUTES)
+    for other in Spot.objects.filter(status='pending', created_at__gte=cutoff):
+        if hits(other):
+            raise serializers.ValidationError({
+                'position_x': 'Someone is checking out that spot right now. '
+                              'Try again in a few minutes.'
+            })
+
+    standing = [
+        o for o in Spot.objects.filter(status__in=['confirmed', 'placed']) if hits(o)
+    ]
+    if standing and not allow_paid_overlap:
+        # El giveaway no supera a nadie: un lugar gratis no puede sacarle el
+        # suyo a alguien que pagó.
+        raise serializers.ValidationError({
+            'position_x': 'That spot is taken. Pick a free one.'
+        })
+    return w, h, standing
+
+
 class SpotSerializer(serializers.ModelSerializer):
     """Serializa un Spot para lectura y para creación (POST /api/spots/).
 
@@ -49,6 +106,9 @@ class SpotSerializer(serializers.ModelSerializer):
 
     logo_url = serializers.SerializerMethodField()
     placed_photo_url = serializers.SerializerMethodField()
+    #: Un lugar regalado se muestra como tal. Que aparezca con "$0 pagados" al
+    #: lado de gente que puso plata sería confuso para las dos partes.
+    is_free = serializers.SerializerMethodField()
     offered_price = serializers.FloatField(
         write_only=True, required=False, min_value=0
     )
@@ -61,10 +121,11 @@ class SpotSerializer(serializers.ModelSerializer):
             'size', 'width_cm',
             'height_cm', 'position_x', 'position_y', 'price_paid', 'status',
             'created_at', 'offered_price', 'datafast_visitor_id',
+            'clicks_count', 'is_free',
         ]
         read_only_fields = [
-            'id', 'logo_url', 'placed_photo_url', 'price_paid', 'status',
-            'created_at',
+            'id', 'logo_url', 'placed_photo_url', 'is_free', 'clicks_count',
+            'price_paid', 'status', 'created_at',
         ]
         extra_kwargs = {
             # El comprador adjunta el logo tal cual: se guarda sin reprocesar.
@@ -81,6 +142,9 @@ class SpotSerializer(serializers.ModelSerializer):
             'position_x': {'required': False},
             'position_y': {'required': False},
         }
+
+    def get_is_free(self, obj):
+        return hasattr(obj, 'giveaway')
 
     def get_placed_photo_url(self, obj):
         url = obj.placed_photo_url

@@ -11,8 +11,8 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from . import services
-from .models import Spot, Visitor
+from . import services, views
+from .models import Click, Giveaway, Spot, Visitor
 
 
 def _webhook_headers(body: bytes, secret: str, msg_id='msg_test'):
@@ -535,6 +535,155 @@ class WebhookTests(TestCase):
         with override_settings(DODO_WEBHOOK_SECRET=self.secret):
             resp = _post_webhook(self.client, body, self.secret)
         self.assertEqual(resp.json()['updated'], False)  # ya estaba confirmado
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class ClickTests(TestCase):
+    def setUp(self):
+        self.spot = Spot.objects.create(
+            brand_name='Sponsor', website='https://sponsor.dev', size='small',
+            width_cm=4.5, height_cm=4.5, price_paid=500, status='confirmed',
+        )
+
+    def _click(self, ip='9.9.9.9'):
+        return self.client.post(
+            reverse('spots-click', args=[self.spot.id]), REMOTE_ADDR=ip
+        )
+
+    def test_one_click_per_ip_forever(self):
+        """El número por el que un sponsor juzga tiene que ser real."""
+        self.assertTrue(self._click().json()['counted'])
+        for _ in range(5):
+            self.assertFalse(self._click().json()['counted'])
+        self.spot.refresh_from_db()
+        self.assertEqual(self.spot.clicks_count, 1)
+        self.assertEqual(Click.objects.count(), 1)
+
+    def test_a_different_address_is_a_different_click(self):
+        self._click('1.1.1.1')
+        self._click('2.2.2.2')
+        self.spot.refresh_from_db()
+        self.assertEqual(self.spot.clicks_count, 2)
+
+    def test_the_address_is_never_stored(self):
+        """Sólo el hash con sal. Guardar la IP haría de esto otra cosa."""
+        self._click('8.8.8.8')
+        click = Click.objects.get()
+        self.assertNotIn('8.8.8.8', click.ip_hash)
+        self.assertEqual(len(click.ip_hash), 64)
+
+    def test_clicks_on_a_spot_that_is_not_on_the_glass_do_not_count(self):
+        pend = Spot.objects.create(
+            brand_name='P', size='small', width_cm=4.5, height_cm=4.5,
+            price_paid=500, status='pending', position_x=0.2, position_y=0.2,
+        )
+        resp = self.client.post(reverse('spots-click', args=[pend.id]))
+        self.assertFalse(resp.json()['counted'])
+        self.assertEqual(Click.objects.count(), 0)
+
+    def test_the_count_reaches_the_page(self):
+        self._click('4.4.4.4')
+        row = self.client.get(reverse('spots-list')).json()[0]
+        self.assertEqual(row['clicks_count'], 1)
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(), GIVEAWAY_SEATS=7)
+class GiveawayTests(TestCase):
+    PNG = base64.b64decode(
+        b'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQ'
+        b'DwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    )
+
+    def _payload(self, **over):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        data = {
+            'brand_name': 'Regalado', 'website': 'https://regalado.dev',
+            'size': 'small', 'position_x': '0.5', 'position_y': '0.5',
+            'tweet_url': 'https://x.com/someone/status/1234567890',
+            'email': 'a@b.com',
+            'logo': SimpleUploadedFile('l.png', self.PNG, content_type='image/png'),
+        }
+        data.update(over)
+        return data
+
+    def _verified(self, handle='someone'):
+        from .tweets import VerifiedTweet
+        return mock.patch.object(
+            views, 'verify_tweet',
+            return_value=VerifiedTweet(tweet_id='123', author_handle=handle, text='ok'),
+        )
+
+    def test_seats_left_is_public(self):
+        body = self.client.get(reverse('giveaway')).json()
+        self.assertEqual(body['seatsLeft'], 7)
+        self.assertIn('#1', body['phrase'])
+
+    def test_a_verified_post_takes_a_seat(self):
+        with self._verified():
+            resp = self.client.post(reverse('giveaway'), self._payload())
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.json()['seat'], 1)
+        self.assertEqual(resp.json()['seatsLeft'], 6)
+
+        spot = Spot.objects.get(brand_name='Regalado')
+        self.assertEqual(spot.status, 'confirmed')
+        # Cero y a propósito: nadie pagó, así que esto no puede mover el goal.
+        self.assertEqual(spot.price_paid, 0)
+        self.assertTrue(spot.logo)
+
+    def test_a_free_spot_never_moves_the_goal(self):
+        """Si un regalo sumara al total recaudado, el total sería mentira."""
+        with self._verified():
+            self.client.post(reverse('giveaway'), self._payload())
+        self.assertEqual(self.client.get(reverse('goal')).json()['raised'], 0)
+
+    def test_without_the_post_there_is_no_seat(self):
+        from .tweets import TweetError
+        with mock.patch.object(
+            views, 'verify_tweet', side_effect=TweetError('That post does not mention it.')
+        ):
+            resp = self.client.post(reverse('giveaway'), self._payload())
+        self.assertEqual(resp.status_code, 400)
+        # Ni asiento gastado ni Spot huérfano en el vidrio.
+        self.assertEqual(Giveaway.objects.count(), 0)
+        self.assertEqual(Spot.objects.count(), 0)
+
+    def test_a_free_spot_cannot_take_a_paid_one(self):
+        Spot.objects.create(
+            brand_name='Pagó', size='small', width_cm=4.5, height_cm=4.5,
+            position_x=0.5, position_y=0.5, price_paid=2000, status='placed',
+        )
+        with self._verified():
+            resp = self.client.post(reverse('giveaway'), self._payload())
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(Giveaway.objects.count(), 0)
+
+    def test_the_whole_sticker_still_has_to_fit(self):
+        """Misma regla que la compra: el lugar gratis no afloja la geometría."""
+        with self._verified():
+            resp = self.client.post(
+                reverse('giveaway'), self._payload(position_x='0.99')
+            )
+        self.assertEqual(resp.status_code, 400)
+
+    @override_settings(GIVEAWAY_SEATS=1)
+    def test_the_last_seat_can_only_be_taken_once(self):
+        with self._verified():
+            self.assertEqual(
+                self.client.post(reverse('giveaway'), self._payload()).status_code, 201
+            )
+            resp = self.client.post(
+                reverse('giveaway'),
+                self._payload(brand_name='Segundo', position_x='0.2', position_y='0.2'),
+            )
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(Giveaway.objects.count(), 1)
+
+    @override_settings(GIVEAWAY_SEATS=0)
+    def test_zero_seats_is_the_campaign_being_off(self):
+        with self._verified():
+            resp = self.client.post(reverse('giveaway'), self._payload())
+        self.assertEqual(resp.status_code, 409)
 
 
 class GoalTests(TestCase):

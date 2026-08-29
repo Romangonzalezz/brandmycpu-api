@@ -1,5 +1,6 @@
 from django.core.validators import FileExtensionValidator
 from django.db import models
+from django.db.models import Q
 
 # Formatos que aceptamos tal cual del comprador (no se reprocesan).
 LOGO_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'svg']
@@ -59,6 +60,9 @@ class Spot(models.Model):
     )
     # ID del pago devuelto por DodoPayments (para idempotencia del webhook)
     payment_id = models.CharField(max_length=200, blank=True)
+    # Clicks salientes hacia el sitio del sponsor. Denormalizado: la tabla lo
+    # muestra en cada fila y contar filas de Click en cada render no escala.
+    clicks_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -85,6 +89,83 @@ class Spot(models.Model):
     @property
     def amount_dollars(self):
         return round(self.price_paid / 100, 2)
+
+
+class Click(models.Model):
+    """Un click saliente hacia el sitio de un sponsor.
+
+    Es el número por el que un sponsor juzga si esto valió la pena, así que
+    tiene que ser real: uno por dirección y nada más. No hay identificador de
+    visitante en ninguna parte de esta tabla, y la IP se guarda sólo como hash
+    con sal, que sirve para deduplicar y para nada más.
+
+    El constraint hace el trabajo, no un chequeo previo. Leer y después
+    insertar deja pasar dos clicks simultáneos de la misma dirección; la base
+    decide y no hay carrera que perder.
+    """
+
+    spot = models.ForeignKey('Spot', on_delete=models.CASCADE, related_name='clicks')
+    ip_hash = models.CharField(max_length=64, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['spot', '-created_at'])]
+        constraints = [
+            # Sin la condición, todos los clicks sin dirección colapsarían en
+            # una sola fila y se perderían muchos más clicks reales que los
+            # duplicados que evita.
+            models.UniqueConstraint(
+                fields=['spot', 'ip_hash'],
+                condition=~Q(ip_hash=''),
+                name='one_click_per_ip_per_spot',
+            )
+        ]
+
+    def __str__(self):
+        return f'click en {self.spot_id} el {self.created_at:%Y-%m-%d %H:%M}'
+
+
+class Giveaway(models.Model):
+    """Un lugar regalado, ya tomado.
+
+    No es un canje ni un pago. Un canje lo sienta el operador y no hay
+    visitante; un pago es plata. Esto es lo tercero: alguien de afuera se llevó
+    un lugar que el vidrio estaba regalando, y hay que recordar que ya no está.
+
+    `seat` es lo que lo hace seguro. Cuántos hay es configuración, y "cuántos
+    quedan" es GIVEAWAY_SEATS menos las filas de acá, pero contar filas no se
+    puede trabar: dos personas reclamando el último leerían el mismo número y
+    pasarían las dos. Cada reclamo escribe el asiento que cree estar tomando
+    bajo un constraint único, y la carrera la decide la base. Un constraint es
+    una garantía y un conteo es una opinión.
+
+    Sin campo de plata y a propósito: no se pagó nada, así que nada de acá
+    puede llegar al goal. El vidrio va a decir más stickers que dólares, que es
+    exactamente lo que significa un giveaway.
+    """
+
+    spot = models.OneToOneField('Spot', on_delete=models.CASCADE, related_name='giveaway')
+    #: Base 1, y único: el constraint ES el control de concurrencia.
+    seat = models.PositiveIntegerField(unique=True)
+
+    #: El post que pagó el lugar. Es el recibo: se cambió vidrio por una
+    #: declaración pública, y sin esto no hay forma de comprobar después que
+    #: esa declaración existió.
+    tweet_id = models.CharField(max_length=32, blank=True, default='')
+    tweet_handle = models.CharField(max_length=32, blank=True, default='')
+
+    #: Para avisarle que su sticker está puesto. Nunca se muestra.
+    email = models.EmailField(blank=True, default='')
+    #: Misma forma que Click: hash con sal, nunca una dirección.
+    ip_hash = models.CharField(max_length=64, blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['seat']
+
+    def __str__(self):
+        return f'giveaway asiento {self.seat} -> {self.spot_id}'
 
 
 class Visitor(models.Model):
