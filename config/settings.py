@@ -28,6 +28,16 @@ ALLOWED_HOSTS = config(
     'ALLOWED_HOSTS', default='localhost,127.0.0.1,.railway.app'
 ).split(',')
 
+# El TLS lo termina el proxy de Railway y a Django le llega HTTP plano. Sin
+# esto `request.build_absolute_uri()` arma los logo_url de los sponsors en
+# http://, y el frontend vive en https: contenido mixto que el navegador
+# bloquea o tiene que actualizar por su cuenta, un salto extra por logo.
+#
+# Sólo es seguro porque el contenedor no es alcanzable salvo por ese proxy,
+# que reescribe la cabecera. Expuesto directo, cualquiera falsearía el header
+# y Django creería que una request en claro llegó por https.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 # ── Aplicaciones ───────────────────────────────────────────────────────────
 INSTALLED_APPS = [
     'django.contrib.admin',

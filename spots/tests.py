@@ -404,6 +404,19 @@ class SpotEndpointTests(TestCase):
         url = self.client.get(reverse('spots-list')).json()[0]['logo_url']
         self.assertTrue(url.startswith('http://testserver/media/logos/'), url)
 
+    def test_logo_url_is_https_behind_the_proxy(self):
+        """Railway termina el TLS: si el logo sale en http://, el frontend
+        (que es https) lo sirve como contenido mixto."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        Spot.objects.create(
+            brand_name='ConLogo', size='small', width_cm=4.5, height_cm=4.5,
+            price_paid=500, status='placed',
+            logo=SimpleUploadedFile('l.png', b'x', content_type='image/png'),
+        )
+        resp = self.client.get(reverse('spots-list'), HTTP_X_FORWARDED_PROTO='https')
+        url = resp.json()[0]['logo_url']
+        self.assertTrue(url.startswith('https://'), url)
+
     def test_price_below_minimum_rejected(self):
         resp = self.client.post(
             reverse('spots-list'),
