@@ -151,6 +151,9 @@ class Giveaway(models.Model):
     #: El post que pagó el lugar. Es el recibo: se cambió vidrio por una
     #: declaración pública, y sin esto no hay forma de comprobar después que
     #: esa declaración existió.
+    #: Único: un post paga UN lugar. Es lo que reemplaza al número de asiento
+    #: dentro del texto, y lo hace mejor, porque no depende de que alguien
+    #: copie bien una cadena.
     tweet_id = models.CharField(max_length=32, blank=True, default='')
     tweet_handle = models.CharField(max_length=32, blank=True, default='')
 
@@ -163,6 +166,15 @@ class Giveaway(models.Model):
 
     class Meta:
         ordering = ['seat']
+        constraints = [
+            # Sin la condición, dos reclamos sin post (que no existen hoy, pero
+            # el campo admite vacío) chocarían entre sí.
+            models.UniqueConstraint(
+                fields=['tweet_id'],
+                condition=~Q(tweet_id=''),
+                name='one_seat_per_post',
+            )
+        ]
 
     def __str__(self):
         return f'giveaway asiento {self.seat} -> {self.spot_id}'

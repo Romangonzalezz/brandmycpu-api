@@ -190,6 +190,19 @@ if FAKE_PAYMENTS and not DEBUG:
         'DEBUG=True, nunca en un entorno desplegado.'
     )
 
+# True = da por bueno cualquier post de X sin verificarlo. Para ver el flujo del
+# giveaway en local, donde no hay un post real que citar.
+#
+# Misma guarda dura que FAKE_PAYMENTS, y por una razón más fuerte: verificar el
+# post es lo único que separa siete lugares gratis de siete bots. Desplegar esto
+# encendido regala el vidrio entero.
+FAKE_TWEETS = config('FAKE_TWEETS', default=False, cast=bool)
+if FAKE_TWEETS and not DEBUG:
+    raise ImproperlyConfigured(
+        'FAKE_TWEETS reparte lugares gratis sin comprobar el post. Sólo se '
+        'permite con DEBUG=True, nunca en un entorno desplegado.'
+    )
+
 # ── DataFast ────────────────────────────────────────────────────────────────
 # Clave de la Payments API (df_...). Vacía = no se reporta nada.
 DATAFAST_API_KEY = config('DATAFAST_API_KEY', default='')
@@ -206,3 +219,8 @@ IP_HASH_SALT = config('IP_HASH_SALT', default=SECRET_KEY)
 # campaña que terminó se apaga bajando esto, y un deploy sin configurar no
 # empieza a repartir vidrio gratis por su cuenta.
 GIVEAWAY_SEATS = config('GIVEAWAY_SEATS', default=0, cast=int)
+
+# El handle que el post tiene que mencionar para pagar un lugar gratis. Sin
+# arroba. Una mención SÍ vuelve en la respuesta de oEmbed, a diferencia de un
+# enlace, que X reescribe a t.co y deja de ser comprobable.
+X_HANDLE = config('X_HANDLE', default='romg_dev')

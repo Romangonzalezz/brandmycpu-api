@@ -12,15 +12,25 @@ toda URL a un shortlink t.co, así que el destino no está en la respuesta, y el
 texto del enlace tampoco. Resolver el t.co sería seguir una redirección hacia un
 host que eligió un desconocido, para una garantía más débil que la de abajo.
 
-El texto del post, en cambio, vuelve tal cual. Así que la prueba son dos frases
-que tienen que aparecer en él: el nombre del sitio y el asiento que se reclama.
+El texto del post, en cambio, vuelve tal cual. Así que la prueba es que nombre
+al sitio:
 
-    "just claimed free spot #3 on BrandMyCPU"
-                                ~~          ~~~~~~~~~~
+    "I just claimed my spot on BrandMyCPU"
+                              ~~~~~~~~~~
 
-Hacen falta las dos. El nombre solo dejaría que cualquier post que alguna vez
-mencionó el sitio pague un lugar; el número solo es una cadena que aparece en la
-mitad de los posts de internet.
+Y una sola cosa más, que no está en el texto: **un post paga un asiento**. El
+id del post es único en la tabla, así que copiar el post de otro sirve para un
+lugar y nada más, y presentarlo dos veces no entrega dos.
+
+Ese constraint es lo que permite que el texto no lleve número de asiento. Antes
+sí lo llevaba, y era lo único que impedía que un mismo post reclamara los siete
+lugares; pedirle a alguien que escriba "#3" a cambio de nada era cobrarle el
+agujero de la implementación en incomodidad. La base lo resuelve mejor.
+
+El dominio NO se comprueba, y no es un olvido: X reescribe toda URL a un
+shortlink t.co, así que ni el destino ni el texto del enlace vuelven en la
+respuesta. Comprobarlo obligaría a seguir una redirección hacia un host que
+eligió un desconocido, para una garantía más débil que la de arriba.
 
 ── Lo que esto NO prueba, y a sabiendas ──────────────────────────────────
 
@@ -85,8 +95,14 @@ class VerifiedTweet:
 
 
 def phrase_for(seat: int) -> str:
-    """La línea que el post tiene que llevar, tal como la lee una persona."""
-    return f'free spot #{seat} on BrandMyCPU'
+    """Lo que el post tiene que nombrar, tal como lo lee una persona.
+
+    `seat` ya no entra en la frase: lo que ata un post a un solo lugar es el
+    constraint sobre su id, no una cadena que la persona tenga que copiar bien.
+    Se mantiene el parámetro porque la vista lo pasa y porque el asiento sigue
+    existiendo, sólo que dejó de ser una carga para el que postea.
+    """
+    return 'BrandMyCPU'
 
 
 def _squeeze(text: str) -> str:
@@ -137,10 +153,6 @@ def verify_tweet(*, tweet_url: str, seat: int) -> VerifiedTweet:
 
     if SITE_WORD not in squeezed:
         raise TweetError('That post does not mention BrandMyCPU.')
-    if f'#{seat}' not in squeezed:
-        raise TweetError(
-            f'That post does not say #{seat}, which is the spot you are claiming.'
-        )
 
     return VerifiedTweet(
         tweet_id=tweet_id,

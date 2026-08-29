@@ -616,7 +616,9 @@ class GiveawayTests(TestCase):
     def test_seats_left_is_public(self):
         body = self.client.get(reverse('giveaway')).json()
         self.assertEqual(body['seatsLeft'], 7)
-        self.assertIn('#1', body['phrase'])
+        # Lo unico que el post tiene que nombrar. El asiento ya no va en el
+        # texto: lo ata el constraint sobre el id del post.
+        self.assertEqual(body['phrase'], 'BrandMyCPU')
 
     def test_a_verified_post_takes_a_seat(self):
         with self._verified():
@@ -679,11 +681,91 @@ class GiveawayTests(TestCase):
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(Giveaway.objects.count(), 1)
 
+    def test_one_post_pays_for_one_seat(self):
+        """Sin esto, copiar el post de otro se presenta siete veces y se lleva
+        los siete lugares. Es lo que permite que el texto no tenga que llevar
+        el número del asiento."""
+        from .tweets import VerifiedTweet
+        same = mock.patch.object(
+            views, 'verify_tweet',
+            return_value=VerifiedTweet(tweet_id='999', author_handle='x', text=''),
+        )
+        with same:
+            first = self.client.post(reverse('giveaway'), self._payload())
+            second = self.client.post(
+                reverse('giveaway'),
+                self._payload(brand_name='Copión', position_x='0.2', position_y='0.2'),
+            )
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(Giveaway.objects.count(), 1)
+        # Y no quedó un sticker suelto en el vidrio del reclamo que no entró.
+        self.assertEqual(Spot.objects.count(), 1)
+
     @override_settings(GIVEAWAY_SEATS=0)
     def test_zero_seats_is_the_campaign_being_off(self):
         with self._verified():
             resp = self.client.post(reverse('giveaway'), self._payload())
         self.assertEqual(resp.status_code, 409)
+
+
+class TweetProofTests(TestCase):
+    """Lo único que separa siete lugares gratis de siete bots."""
+
+    URL = 'https://x.com/someone/status/1234567890'
+
+    def _oembed(self, text):
+        resp = mock.Mock(status_code=200)
+        resp.json.return_value = {
+            'html': f'<blockquote><p>{text}</p></blockquote>',
+            'author_url': 'https://twitter.com/someone',
+        }
+        return mock.patch('spots.tweets.requests.get', return_value=resp)
+
+    def test_naming_the_site_proves_the_claim(self):
+        from .tweets import verify_tweet
+        with self._oembed('I just claimed my spot on BrandMyCPU'):
+            tweet = verify_tweet(tweet_url=self.URL, seat=3)
+        self.assertEqual(tweet.tweet_id, '1234567890')
+        self.assertEqual(tweet.author_handle, 'someone')
+
+    def test_spelling_spacing_and_case_do_not_cost_a_spot(self):
+        """Nadie debería perder un lugar por un guion."""
+        from .tweets import verify_tweet
+        for text in (
+            'MY SPOT ON BRAND-MY-CPU',
+            'got on brand my cpu today',
+        ):
+            with self._oembed(text):
+                self.assertTrue(verify_tweet(tweet_url=self.URL, seat=3).tweet_id)
+
+    def test_naming_nothing_proves_nothing(self):
+        from .tweets import TweetError, verify_tweet
+        with self._oembed('what a nice PC, I want one'):
+            with self.assertRaises(TweetError):
+                verify_tweet(tweet_url=self.URL, seat=3)
+
+    def test_a_link_that_is_not_a_post_is_refused_before_any_request(self):
+        from .tweets import TweetError, verify_tweet
+        for bad in ('https://x.com/romg_dev', 'brandmycpu.lol', ''):
+            with self.assertRaises(TweetError):
+                verify_tweet(tweet_url=bad, seat=1)
+
+    def test_our_timeout_is_never_told_as_their_post_missing(self):
+        """Nunca decirle a alguien que su post real no existe porque a nosotros
+        se nos venció una request."""
+        from .tweets import TweetError, verify_tweet
+        import requests as rq
+        with mock.patch('spots.tweets.requests.get', side_effect=rq.Timeout()):
+            with self.assertRaises(TweetError) as ctx:
+                verify_tweet(tweet_url=self.URL, seat=1)
+        self.assertIn('Try again', str(ctx.exception))
+
+    def test_a_private_or_deleted_post_is_not_a_public_statement(self):
+        from .tweets import TweetError, verify_tweet
+        with mock.patch('spots.tweets.requests.get', return_value=mock.Mock(status_code=404)):
+            with self.assertRaises(TweetError):
+                verify_tweet(tweet_url=self.URL, seat=1)
 
 
 class GoalTests(TestCase):

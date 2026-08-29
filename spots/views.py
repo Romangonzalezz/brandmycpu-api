@@ -14,7 +14,7 @@ from rest_framework.response import Response
 from . import services
 from .common import client_ip, hash_ip
 from .models import Click, Giveaway, Spot, Visitor
-from .tweets import TweetError, phrase_for, verify_tweet
+from .tweets import TweetError, VerifiedTweet, phrase_for, verify_tweet
 from .serializers import (
     ActivitySerializer,
     GoalSerializer,
@@ -372,10 +372,17 @@ def giveaway(request):
 
     # El post se verifica ANTES de escribir nada: si no prueba lo que tiene que
     # probar, no se gastó un asiento ni quedó un Spot huérfano en el vidrio.
-    try:
-        tweet = verify_tweet(tweet_url=data.get('tweet_url', ''), seat=seat)
-    except TweetError as exc:
-        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    if settings.FAKE_TWEETS:
+        # Sólo con DEBUG=True: settings.py lo impide en cualquier otro lado.
+        logger.warning('FAKE_TWEETS: asiento %s sin comprobar el post.', seat)
+        # Un id por asiento: si fueran todos 'fake', el constraint de un post
+        # por lugar tumbaría el segundo reclamo local y parecería un bug.
+        tweet = VerifiedTweet(tweet_id=f'fake-{seat}', author_handle='dev', text='')
+    else:
+        try:
+            tweet = verify_tweet(tweet_url=data.get('tweet_url', ''), seat=seat)
+        except TweetError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         with transaction.atomic():
