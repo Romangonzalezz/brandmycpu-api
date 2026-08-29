@@ -26,6 +26,9 @@ media/*
 media/logos/*
 !media/logos/brandthis.svg
 !media/logos/313237.png
+!media/logos/makeitappear.lol.png
+!media/logos/ChatGPT_Image_Aug_24_2026_03_50_56_AM.png
+!media/logos/encrypted-clipboard-icon-full-dark-bg.png
 logs/
 *.log
 
