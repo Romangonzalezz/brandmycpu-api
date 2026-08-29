@@ -16,9 +16,16 @@ media/*
 # los sube el comprador y viven en el disco del contenedor, pero ese disco es
 # efimero y no hay volumen montado, asi que un canje se perderia en cada
 # deploy. Versionarlo es lo que lo hace volver solo.
+# Lista blanca, un archivo por linea, y a proposito.
+#
+# Abrir todo `logos/` barreria tambien las pruebas locales (acme, dev_*, x_*),
+# que terminarian publicadas en el servidor y accesibles por URL. Cada logo que
+# se rescata del disco efimero se agrega aca a mano hasta que haya un volumen
+# montado; son siete como mucho.
 !media/logos/
 media/logos/*
 !media/logos/brandthis.svg
+!media/logos/313237.png
 logs/
 *.log
 
